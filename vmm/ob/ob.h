@@ -1,6 +1,6 @@
 // ob.h : definitions related to the object manager and object manager collections.
 //
-// (c) Ulf Frisk, 2018-2020
+// (c) Ulf Frisk, 2018-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OB_H__
@@ -12,9 +12,11 @@ typedef unsigned __int64                QWORD, *PQWORD;
 #define OB_HEADER_MAGIC                 0x0c0efefe
 
 #define OB_TAG_CORE_CONTAINER           'ObCo'
+#define OB_TAG_CORE_COMPRESSED          'ObCp'
 #define OB_TAG_CORE_DATA                'ObDa'
 #define OB_TAG_CORE_SET                 'ObSe'
 #define OB_TAG_CORE_MAP                 'ObMa'
+#define OB_TAG_CORE_MEMFILE             'ObMF'
 #define OB_TAG_CORE_CACHEMAP            'ObMc'
 #define OB_TAG_CORE_STRMAP              'ObMs'
 #define OB_TAG_MAP_PTE                  'Mpte'
@@ -26,15 +28,20 @@ typedef unsigned __int64                QWORD, *PQWORD;
 #define OB_TAG_MAP_IAT                  'Miat'
 #define OB_TAG_MAP_THREAD               'Mthr'
 #define OB_TAG_MAP_HANDLE               'Mhnd'
+#define OB_TAG_MAP_OBJECT               'Mobj'
+#define OB_TAG_MAP_KDRIVER              'Mdrv'
 #define OB_TAG_MAP_PHYSMEM              'Mmem'
 #define OB_TAG_MAP_USER                 'Musr'
 #define OB_TAG_MAP_SERVICE              'Msvc'
 #define OB_TAG_MAP_NET                  'Mnet'
 #define OB_TAG_MAP_PFN                  'Mpfn'
 #define OB_TAG_MAP_EVIL                 'Mevl'
+#define OB_TAG_MAP_TASK                 'Mtsk'
 #define OB_TAG_MOD_MINIDUMP_CTX         'mMDx'
 #define OB_TAG_OBJ_ERROR                'Oerr'
 #define OB_TAG_OBJ_FILE                 'Ofil'
+#define OB_TAG_OBJ_DISPLAY              'Odis'
+#define OB_TAG_PDB_CTX                  'PdbC'
 #define OB_TAG_PDB_ENTRY                'PdbE'
 #define OB_TAG_PFN_CONTEXT              'PfnC'
 #define OB_TAG_PFN_PROC_TABLE           'PfnT'
@@ -141,10 +148,23 @@ typedef struct tdOB_DATA {
     OB ObHdr;
     union {
         BYTE pb[];
+        CHAR sz[];
         DWORD pdw[];
         QWORD pqw[];
     };
 } OB_DATA, *POB_DATA;
+
+/*
+* Create a new object manager data object in which the ObHdr->cbData is equal
+* to the number of bytes in the data buffer supplied to this function.
+* May also be created with Ob_Alloc with size: sizeof(OB_HDR) + length of data.
+* CALLER DECREF: return
+* -- pb
+* -- cb
+* -- return
+*/
+_Success_(return != NULL)
+POB_DATA ObData_New(_In_ PBYTE pb, _In_ DWORD cb);
 
 
 
@@ -374,6 +394,7 @@ POB_DATA ObSet_GetAll(_In_opt_ POB_SET pvs);
 
 typedef struct tdOB_MAP *POB_MAP;
 
+#define OB_MAP_FLAGS_OBJECT_VOID        0x00
 #define OB_MAP_FLAGS_OBJECT_OB          0x01
 #define OB_MAP_FLAGS_OBJECT_LOCALFREE   0x02
 #define OB_MAP_FLAGS_NOKEY              0x04
@@ -611,6 +632,7 @@ DWORD ObMap_RemoveByFilter(_In_opt_ POB_MAP pm, _In_opt_ BOOL(*pfnFilter)(_In_ Q
 
 typedef struct tdOB_CACHEMAP *POB_CACHEMAP;
 
+#define OB_CACHEMAP_FLAGS_OBJECT_VOID        0x00
 #define OB_CACHEMAP_FLAGS_OBJECT_OB          0x01
 #define OB_CACHEMAP_FLAGS_OBJECT_LOCALFREE   0x02
 
@@ -706,8 +728,16 @@ PVOID ObCacheMap_RemoveByKey(_In_opt_ POB_CACHEMAP pcm, _In_ QWORD qwKey);
 
 typedef struct tdOB_STRMAP *POB_STRMAP;
 
-#define OB_STRMAP_FLAGS_CASE_SENSITIVE      0x00
-#define OB_STRMAP_FLAGS_CASE_INSENSITIVE    0x01
+// Strings in OB_STRMAP are considered to be CASE SENSITIVE.
+#define OB_STRMAP_FLAGS_CASE_SENSITIVE          0x00
+
+// Strings in OB_STRMAP are considered to be CASE INSENSITIVE. The case is
+// preserved for 1st unique entry added; subsequent entries will use 1st entry.
+#define OB_STRMAP_FLAGS_CASE_INSENSITIVE        0x01
+
+// Assign temporary string values to destinations at time of push.
+// NB! values will become invalid after OB_STRMAP DECREF/FINALIZE!
+#define OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY    0x02
 
 /*
 * Create a new strmap. A strmap (ObStrMap) provides an easy way to add new
@@ -730,7 +760,7 @@ POB_STRMAP ObStrMap_New(_In_ QWORD flags);
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_PushA(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz, _In_opt_ LPWSTR *pwszDst, _In_opt_ PDWORD pcchDst);
+BOOL ObStrMap_PushA(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
 
 /*
 * Push / Insert into the ObStrMap.
@@ -741,7 +771,7 @@ BOOL ObStrMap_PushA(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz, _In_opt_ LPWSTR 
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_Push(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _In_opt_ LPWSTR *pwszDst, _In_opt_ PDWORD pcchDst);
+BOOL ObStrMap_Push(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
 
 /*
 * Push / Insert max 2048 characters into ObStrMap using a swprintf_s syntax.
@@ -753,7 +783,33 @@ BOOL ObStrMap_Push(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _In_opt_ LPWSTR
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_Push_swprintf_s(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR *pwszDst, _In_opt_ PDWORD pcchDst, _In_z_ _Printf_format_string_ wchar_t const *const wszFormat, ...);
+BOOL ObStrMap_Push_swprintf_s(_In_opt_ POB_STRMAP psm, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst, _In_z_ _Printf_format_string_ wchar_t const *const wszFormat, ...);
+
+/*
+* Push a UNICODE_OBJECT Pointer for delayed resolve at finalize stage.
+* NB! Incompatible with: OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY create flag.
+* -- psm
+* -- f32 = 32-bit/64-bit unicode object.
+* -- vaUnicodeObject
+* -- pwszDst
+* -- pcchDst
+* -- return = TRUE on initial validation success (NB! no guarantee for success).
+*/
+_Success_(return)
+BOOL ObStrMap_Push_UnicodeObject(_In_opt_ POB_STRMAP psm, _In_ BOOL f32, _In_ QWORD vaUnicodeObject, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
+
+/*
+* Push a UNICODE_OBJECT Buffer for delayed resolve at finalize stage.
+* NB! Incompatible with: OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY create flag.
+* -- psm
+* -- cbUnicodeBuffer.
+* -- vaUnicodeBuffer
+* -- pwszDst
+* -- pcchDst
+* -- return = TRUE on initial validation success (NB! no guarantee for success).
+*/
+_Success_(return)
+BOOL ObStrMap_Push_UnicodeBuffer(_In_opt_ POB_STRMAP psm, _In_ WORD cbUnicodeBuffer, _In_ QWORD vaUnicodeBuffer, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
 
 /*
 * Finalize the ObStrMap. Create and assign the MultiStr and assign each
@@ -770,5 +826,111 @@ BOOL ObStrMap_Push_swprintf_s(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR *pwszDst,
 */
 _Success_(return)
 BOOL ObStrMap_Finalize_DECREF_NULL(_In_opt_ PVOID *ppsm, _Out_ LPWSTR *pwszMultiStr, _Out_ PDWORD pcbMultiStr);
+
+
+
+// ----------------------------------------------------------------------------
+// COMPRESSED DATA OBJECT FUNCTIONALITY BELOW:
+//
+// The ObCompressed is an object manager object and must be DECREF'ed when required.
+// ----------------------------------------------------------------------------
+
+typedef struct tdOB_COMPRESSED *POB_COMPRESSED;
+
+/*
+* Create a new compressed buffer object from a byte buffer.
+* CALLER DECREF: return
+* -- pb
+* -- cb
+* -- return
+*/
+_Success_(return != NULL)
+POB_COMPRESSED ObCompressed_NewFromByte(_In_reads_(cb) PBYTE pb, _In_ DWORD cb);
+
+/*
+* Create a new compressed buffer object from a zero terminated string.
+* CALLER DECREF: return
+* -- sz
+* -- return
+*/
+_Success_(return != NULL)
+POB_COMPRESSED ObCompress_NewFromStrA(_In_ LPSTR sz);
+
+/*
+* Retrieve the uncompressed size of the compressed data object.
+* -- pdc
+* -- return
+*/
+DWORD ObCompress_Size(_In_opt_ POB_COMPRESSED pdc);
+
+/*
+* Retrieve uncompressed from a compressed data object.
+* CALLER DECREF: return
+* -- pdc
+* -- return
+*/
+_Success_(return != NULL)
+POB_DATA ObCompressed_GetData(_In_opt_ POB_COMPRESSED pdc);
+
+
+
+// ----------------------------------------------------------------------------
+// MEMORY BACKED FILE FUNCTIONALITY BELOW:
+// 
+// The memfile is a growing memory backed file that may be read and appended.
+// The memfile will be automatically (de)compressed when it's required for
+// optimal performance. This object is typically implementing a generated
+// output file - such as some forensic JSON data output.
+//
+// The ObMemFile is an object manager object and must be DECREF'ed when required.
+// ----------------------------------------------------------------------------
+
+typedef struct tdOB_MEMFILE *POB_MEMFILE;
+
+/*
+* Create a new empty memory file.
+* CALLER DECREF: return
+* -- return
+*/
+_Success_(return != NULL)
+POB_MEMFILE ObMemFile_New();
+
+/*
+* Retrieve byte count of the ObMemFile.
+* -- pmf
+* -- return
+*/
+QWORD ObMemFile_Size(_In_opt_ POB_MEMFILE pmf);
+
+/*
+* Append binary data to the ObMemFile.
+* -- pmf
+* -- pb
+* -- cb
+* -- return
+*/
+_Success_(return)
+BOOL ObMemFile_Append(_In_opt_ POB_MEMFILE pmf, _In_reads_(cb) PBYTE pb, _In_ QWORD cb);
+
+/*
+* Append a string (ansi or utf-8) to the ObMemFile.
+* -- pmf
+* -- sz
+* -- return
+*/
+_Success_(return)
+BOOL ObMemFile_AppendString(_In_opt_ POB_MEMFILE pmf, _In_opt_z_ LPSTR sz);
+
+/*
+* Read data 'as file' from the ObMemFile.
+* -- pmf
+* -- pb
+* -- cb
+* -- pcbRad
+* -- cbOffset
+* -- return
+*/
+_Success_(return == 0)
+NTSTATUS ObMemFile_ReadFile(_In_opt_ POB_MEMFILE pmf, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 
 #endif /* __OB_H__ */

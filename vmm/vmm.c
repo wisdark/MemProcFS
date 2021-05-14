@@ -1,6 +1,6 @@
 // vmm.c : implementation of functions related to virtual memory management support.
 //
-// (c) Ulf Frisk, 2018-2020
+// (c) Ulf Frisk, 2018-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -522,352 +522,7 @@ BOOL VmmCachePrefetchPages5(_In_opt_ PVMM_PROCESS pProcess, _In_opt_ POB_MAP pmP
     return fResult;
 }
 
-// ----------------------------------------------------------------------------
-// MAP FUNCTIONALITY BELOW: 
-// SUPPORTED MAPS: PTE, VAD, MODULE, HEAP
-// ----------------------------------------------------------------------------
 
-/*
-* Retrieve the PTE hardware page table memory map.
-* CALLER DECREF: ppObPteMap
-* -- pProcess
-* -- ppObPteMap
-* -- fExtendedText
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetPte(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_PTE *ppObPteMap, _In_ BOOL fExtendedText)
-{
-    return
-        (ctxVmm->tpMemoryModel != VMM_MEMORYMODEL_NA) &&
-        ctxVmm->fnMemoryModel.pfnPteMapInitialize(pProcess) &&
-        (!fExtendedText || VmmWinPte_InitializeMapText(pProcess)) &&
-        (*ppObPteMap = Ob_INCREF(pProcess->Map.pObPte));
-}
-
-/*
-* Retrieve the VAD extended memory map by range specified by iPage and cPage.
-* CALLER DECREF: ppObVadExMap
-* -- pProcess
-* -- ppObVadExMap
-* -- tpVmmVadMap = VMM_VADMAP_TP_*
-* -- iPage = index of range start in vad map.
-* -- cPage = number of pages, starting at iPage.
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetVadEx(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_VADEX *ppObVadExMap, _In_ VMM_VADMAP_TP tpVmmVadMap, _In_ DWORD iPage, _In_ DWORD cPage)
-{
-    *ppObVadExMap = MmVadEx_MapInitialize(pProcess, tpVmmVadMap, iPage, cPage);
-    return *ppObVadExMap != NULL;
-}
-
-/*
-* Retrieve the VAD memory map.
-* CALLER DECREF: ppObVadMap
-* -- pProcess
-* -- ppObVadMap
-* -- tpVmmVadMap = VMM_VADMAP_TP_*
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetVad(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_VAD *ppObVadMap, _In_ VMM_VADMAP_TP tpVmmVadMap)
-{
-    if(!MmVad_MapInitialize(pProcess, tpVmmVadMap, 0)) { return FALSE; }
-    *ppObVadMap = Ob_INCREF(pProcess->Map.pObVad);
-    return *ppObVadMap != NULL;
-}
-
-int VmmMap_GetVadEntry_CmpFind(_In_ QWORD vaFind, _In_ PVMM_MAP_VADENTRY pEntry)
-{
-    if(pEntry->vaStart > vaFind) { return -1; }
-    if(pEntry->vaEnd < vaFind) { return 1; }
-    return 0;
-}
-
-/*
-* Retrieve a single PVMM_MAP_VADENTRY for a given VadMap and address inside it.
-* -- pVadMap
-* -- va
-* -- return = PTR to VADENTRY or NULL on fail. Must not be used out of pVadMap scope.
-*/
-PVMM_MAP_VADENTRY VmmMap_GetVadEntry(_In_opt_ PVMMOB_MAP_VAD pVadMap, _In_ QWORD va)
-{
-    if(!pVadMap) { return NULL; }
-    return Util_qfind((PVOID)va, pVadMap->cMap, pVadMap->pMap, sizeof(VMM_MAP_VADENTRY), (int(*)(PVOID, PVOID))VmmMap_GetVadEntry_CmpFind);
-}
-
-/*
-* Retrieve the process module map.
-* CALLER DECREF: ppObModuleMap
-* -- pProcess
-* -- ppObModuleMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetModule(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap)
-{
-    if(!pProcess->Map.pObModule && !VmmWinLdrModule_Initialize(pProcess, NULL)) { return FALSE; }
-    *ppObModuleMap = Ob_INCREF(pProcess->Map.pObModule);
-    return *ppObModuleMap != NULL;
-}
-
-int VmmMap_HashTableLookup_CmpFind(_In_ DWORD qwHash, _In_ PDWORD pdwEntry)
-{
-    if(*pdwEntry > qwHash) { return -1; }
-    if(*pdwEntry < qwHash) { return 1; }
-    return 0;
-}
-
-/*
-* Retrieve a single PVMM_MAP_MODULEENTRY for a given ModuleMap and module name inside it.
-* -- pModuleMap
-* -- wszModuleName
-* -- return = PTR to VMM_MAP_MODULEENTRY or NULL on fail. Must not be used out of pModuleMap scope.
-*/
-PVMM_MAP_MODULEENTRY VmmMap_GetModuleEntry(_In_ PVMMOB_MAP_MODULE pModuleMap, _In_ LPWSTR wszModuleName)
-{
-    QWORD qwHash, *pqwHashIndex;
-    WCHAR wsz[MAX_PATH];
-    Util_PathFileNameFixW(wsz, wszModuleName, 0);
-    qwHash = Util_HashStringUpperW(wsz);
-    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pModuleMap->cMap, pModuleMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
-    return pqwHashIndex ? &pModuleMap->pMap[*pqwHashIndex >> 32] : NULL;
-}
-
-/*
-* Retrieve a single VMM_MAP_MODULEENTRY for a given process and module name.
-* CALLER DECREF: ppObModuleMap
-* -- pProcessOpt
-* -- dwPidOpt
-* -- wszModuleName
-* -- ppObModuleMap
-* -- pModuleEntry
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetModuleEntryEx(_In_opt_ PVMM_PROCESS pProcessOpt, _In_opt_ DWORD dwPidOpt, _In_ LPWSTR wszModuleName, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap, _Out_ PVMM_MAP_MODULEENTRY *pModuleEntry)
-{
-    PVMM_PROCESS pObProcess = pProcessOpt ? Ob_INCREF(pProcessOpt) : VmmProcessGet(dwPidOpt);
-    *ppObModuleMap = NULL;
-    *pModuleEntry = NULL;
-    if(VmmMap_GetModule(pObProcess, ppObModuleMap)) {
-        *pModuleEntry = VmmMap_GetModuleEntry(*ppObModuleMap, wszModuleName);
-        Ob_DECREF_NULL(&pObProcess);
-    }
-    return *pModuleEntry != NULL;
-}
-
-/*
-* Retrieve the process unloaded module map.
-* CALLER DECREF: ppObUnloadedModuleMap
-* -- pProcess
-* -- ppObUnloadedModuleMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetUnloadedModule(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_UNLOADEDMODULE *ppObUnloadedModuleMap)
-{
-    if(!pProcess->Map.pObUnloadedModule && !VmmWinUnloadedModule_Initialize(pProcess)) { return FALSE; }
-    *ppObUnloadedModuleMap = Ob_INCREF(pProcess->Map.pObUnloadedModule);
-    return *ppObUnloadedModuleMap != NULL;
-}
-
-/*
-* Retrieve the process module export address table (EAT) map.
-* CALLER DECREF: ppObEatMap
-* -- pProcess
-* -- pModule
-* -- ppObEatMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetEAT(_In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_MODULEENTRY pModuleEntry, _Out_ PVMMOB_MAP_EAT *ppObEatMap)
-{
-    *ppObEatMap = VmmWinEAT_Initialize(pProcess, pModuleEntry);
-    return *ppObEatMap != NULL;
-}
-
-/*
-* Retrieve the export entry index in pEatMap->pMap by function name.
-* -- pEatMap
-* -- wszFunctionName
-* -- pdwEntryIndex = pointer to receive the pEatMap->pMap index.
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetEATEntryIndex(_In_ PVMMOB_MAP_EAT pEatMap, _In_ LPWSTR wszFunctionName, _Out_ PDWORD pdwEntryIndex)
-{
-    QWORD qwHash, *pqwHashIndex;
-    qwHash = Util_HashStringUpperW(wszFunctionName);
-    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pEatMap->cMap, pEatMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
-    *pdwEntryIndex = pqwHashIndex ? *pqwHashIndex >> 32 : 0;
-    return pqwHashIndex != NULL;
-}
-
-_Success_(return)
-BOOL VmmMap_GetEATEntryIndexA(_In_ PVMMOB_MAP_EAT pEatMap, _In_ LPSTR szFunctionName, _Out_ PDWORD pdwEntryIndex)
-{
-    QWORD qwHash, *pqwHashIndex;
-    qwHash = Util_HashStringUpperA(szFunctionName);
-    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pEatMap->cMap, pEatMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
-    *pdwEntryIndex = pqwHashIndex ? *pqwHashIndex >> 32 : 0;
-    return pqwHashIndex != NULL;
-}
-
-/*
-* Retrieve the process module import address table (IAT) map.
-* CALLER DECREF: ppObIatMap
-* -- pProcess
-* -- pModule
-* -- ppObIatMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetIAT(_In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_MODULEENTRY pModuleEntry, _Out_ PVMMOB_MAP_IAT *ppObIatMap)
-{
-    *ppObIatMap = VmmWinIAT_Initialize(pProcess, pModuleEntry);
-    return *ppObIatMap != NULL;
-}
-
-/*
-* Retrieve the heap map.
-* CALLER DECREF: ppObHeapMap
-* -- pProcess
-* -- ppObHeapMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetHeap(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_HEAP *ppObHeapMap)
-{
-    if(!pProcess->Map.pObHeap && !VmmWinHeap_Initialize(pProcess)) { return FALSE; }
-    *ppObHeapMap = Ob_INCREF(pProcess->Map.pObHeap);
-    return *ppObHeapMap != NULL;
-}
-
-/*
-* Retrieve the thread map.
-* CALLER DECREF: ppObThreadMap
-* -- pProcess
-* -- ppObThreadMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetThread(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_THREAD *ppObThreadMap)
-{
-    if(!pProcess->Map.pObThread && !VmmWinThread_Initialize(pProcess)) { return FALSE; }
-    *ppObThreadMap = Ob_INCREF(pProcess->Map.pObThread);
-    return *ppObThreadMap ? TRUE : FALSE;
-}
-
-int VmmMap_GetThreadEntry_CmpFind(_In_ DWORD dwTID, _In_ PVMM_MAP_THREADENTRY pEntry)
-{
-    if(pEntry->dwTID > dwTID) { return -1; }
-    if(pEntry->dwTID < dwTID) { return 1; }
-    return 0;
-}
-
-/*
-* Retrieve a single PVMM_MAP_THREADENTRY for a given ThreadMap and ThreadID.
-* -- pThreadMap
-* -- dwTID
-* -- return = PTR to VMM_MAP_THREADENTRY or NULL on fail. Must not be used out of pThreadMap scope.
-*/
-PVMM_MAP_THREADENTRY VmmMap_GetThreadEntry(_In_ PVMMOB_MAP_THREAD pThreadMap, _In_ DWORD dwTID)
-{
-    QWORD qwTID = dwTID;
-    return Util_qfind((PVOID)qwTID, pThreadMap->cMap, pThreadMap->pMap, sizeof(VMM_MAP_THREADENTRY), (int(*)(PVOID, PVOID))VmmMap_GetThreadEntry_CmpFind);
-}
-
-/*
-* Retrieve the HANDLE map
-* CALLER DECREF: ppObHandleMap
-* -- pProcess
-* -- ppObHandleMap
-* -- fExtendedText
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetHandle(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_HANDLE *ppObHandleMap, _In_ BOOL fExtendedText)
-{
-    if(!VmmWinHandle_Initialize(pProcess, fExtendedText)) { return FALSE; }
-    *ppObHandleMap = Ob_INCREF(pProcess->Map.pObHandle);
-    return *ppObHandleMap != NULL;
-}
-
-/*
-* Retrieve the EVIL map
-* CALLER DECREF: ppObEvilMap
-* -- pProcess = retrieve for specific process, or if NULL for all processes.
-* -- ppObEvilMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetEvil(_In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_EVIL *ppObEvilMap)
-{
-    *ppObEvilMap = VmmEvil_Initialize(pProcess);
-    return *ppObEvilMap != NULL;
-}
-
-/*
-* Retrieve the Physical Memory Map.
-* CALLER DECREF: ppObPhysMem
-* -- ppObPhysMem
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetPhysMem(_Out_ PVMMOB_MAP_PHYSMEM *ppObPhysMem)
-{
-    if(!(*ppObPhysMem = ObContainer_GetOb(ctxVmm->pObCMapPhysMem))) {
-        *ppObPhysMem = VmmWinPhysMemMap_Initialize();
-    }
-    return *ppObPhysMem != NULL;
-}
-
-/*
-* Retrieve the USER map
-* CALLER DECREF: ppObUserMap
-* -- ppObUserMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetUser(_Out_ PVMMOB_MAP_USER *ppObUserMap)
-{
-    if(!(*ppObUserMap = ObContainer_GetOb(ctxVmm->pObCMapUser))) {
-        *ppObUserMap = VmmWinUser_Initialize();
-    }
-    return *ppObUserMap != NULL;
-}
-
-/*
-* Retrieve the NETWORK CONNECTION map
-* CALLER DECREF: ppObNetMap
-* -- ppObNetMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetNet(_Out_ PVMMOB_MAP_NET *ppObNetMap)
-{
-    if(!(*ppObNetMap = ObContainer_GetOb(ctxVmm->pObCMapNet))) {
-        *ppObNetMap = VmmNet_Initialize();
-    }
-    return *ppObNetMap != NULL;
-}
-
-/*
-* Retrieve the SERVICES map
-* CALLER DECREF: ppObServiceMap
-* -- ppObServiceMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetService(_Out_ PVMMOB_MAP_SERVICE *ppObServiceMap)
-{
-    if(!(*ppObServiceMap = ObContainer_GetOb(ctxVmm->pObCMapService))) {
-        *ppObServiceMap = VmmWinSvc_Initialize();
-    }
-    return *ppObServiceMap != NULL;
-}
 
 // ----------------------------------------------------------------------------
 // PROCESS MANAGEMENT FUNCTIONALITY:
@@ -1629,6 +1284,10 @@ VOID VmmWriteScatterVirtual(_In_ PVMM_PROCESS pProcess, _Inout_ PPMEM_SCATTER pp
     DWORD i;
     QWORD qwPA_PTE = 0, qwPagedPA = 0;
     PMEM_SCATTER pMEM;
+    BOOL fSystemProcessMagicHandle = (pProcess == PVMM_PROCESS_SYSTEM);
+    // 0: 'magic' system process handle
+    if(fSystemProcessMagicHandle && !(pProcess = VmmProcessGet(4))) { return; }
+    // 1: virt2phys translation
     for(i = 0; i < cpMEMsVirt; i++) {
         pMEM = ppMEMsVirt[i];
         MEM_SCATTER_STACK_PUSH(pMEM, pMEM->qwA);
@@ -1645,10 +1304,12 @@ VOID VmmWriteScatterVirtual(_In_ PVMM_PROCESS pProcess, _Inout_ PPMEM_SCATTER pp
         ctxVmm->fnMemoryModel.pfnPagedRead(pProcess, pMEM->qwA, qwPA_PTE, NULL, &qwPagedPA, NULL, 0);
         pMEM->qwA = qwPagedPA ? qwPagedPA : -1;
     }
+    // write to physical addresses
     VmmWriteScatterPhysical(ppMEMsVirt, cpMEMsVirt);
     for(i = 0; i < cpMEMsVirt; i++) {
         ppMEMsVirt[i]->qwA = MEM_SCATTER_STACK_POP(ppMEMsVirt[i]);
     }
+    if(fSystemProcessMagicHandle) { Ob_DECREF(pProcess); }
 }
 
 VOID VmmReadScatterPhysical(_Inout_ PPMEM_SCATTER ppMEMsPhys, _In_ DWORD cpMEMsPhys, _In_ QWORD flags)
@@ -1699,7 +1360,7 @@ VOID VmmReadScatterPhysical(_Inout_ PPMEM_SCATTER ppMEMsPhys, _In_ DWORD cpMEMsP
         }
     }
     // 2: speculative future read if negligible performance loss
-    if(fCache && cSpeculative && (cSpeculative < 0x18)) {
+    if(fCache && cSpeculative && (cSpeculative < 0x18) && !(flags & VMMDLL_FLAG_NO_PREDICTIVE_READ)) {
         for(i = 0; i < cpMEMsPhys; i++) {
             pMEM = ppMEMsPhys[i];
             if(1 != MEM_SCATTER_STACK_PEEK(pMEM, 1)) {
@@ -1772,13 +1433,19 @@ VOID VmmReadScatterVirtual(_In_ PVMM_PROCESS pProcess, _Inout_updates_(cpMEMsVir
     BOOL fPaging = !(VMM_FLAG_NOPAGING & (flags | ctxVmm->flags));
     BOOL fAltAddrPte = VMM_FLAG_ALTADDR_VA_PTE & flags;
     BOOL fZeropadOnFail = VMM_FLAG_ZEROPAD_ON_FAIL & (flags | ctxVmm->flags);
+    BOOL fSystemProcessMagicHandle = (pProcess == PVMM_PROCESS_SYSTEM);
+    // 0: 'magic' system process handle
+    if(fSystemProcessMagicHandle && !(pProcess = VmmProcessGet(4))) { return; }
     // 1: allocate / set up buffers (if needed)
     if(cpMEMsVirt < 0x20) {
         ZeroMemory(pbBufferSmall, sizeof(pbBufferSmall));
         ppMEMsPhys = (PPMEM_SCATTER)pbBufferSmall;
         pbBufferMEMs = pbBufferSmall + cpMEMsVirt * sizeof(PMEM_SCATTER);
     } else {
-        if(!(pbBufferLarge = LocalAlloc(LMEM_ZEROINIT, cpMEMsVirt * (sizeof(MEM_SCATTER) + sizeof(PMEM_SCATTER))))) { return; }
+        if(!(pbBufferLarge = LocalAlloc(LMEM_ZEROINIT, cpMEMsVirt * (sizeof(MEM_SCATTER) + sizeof(PMEM_SCATTER))))) {
+            if(fSystemProcessMagicHandle) { Ob_DECREF(pProcess); }
+            return;
+        }
         ppMEMsPhys = (PPMEM_SCATTER)pbBufferLarge;
         pbBufferMEMs = pbBufferLarge + cpMEMsVirt * sizeof(PMEM_SCATTER);
     }
@@ -1831,6 +1498,7 @@ VOID VmmReadScatterVirtual(_In_ PVMM_PROCESS pProcess, _Inout_updates_(cpMEMsVir
         }
     }
     LocalFree(pbBufferLarge);
+    if(fSystemProcessMagicHandle) { Ob_DECREF(pProcess); }
 }
 
 /*
@@ -1913,11 +1581,14 @@ VOID VmmClose()
     Ob_DECREF_NULL(&ctxVmm->pObCMapEvil);
     Ob_DECREF_NULL(&ctxVmm->pObCMapUser);
     Ob_DECREF_NULL(&ctxVmm->pObCMapNet);
+    Ob_DECREF_NULL(&ctxVmm->pObCMapObject);
+    Ob_DECREF_NULL(&ctxVmm->pObCMapKDriver);
     Ob_DECREF_NULL(&ctxVmm->pObCMapService);
     Ob_DECREF_NULL(&ctxVmm->pObCCachePrefetchEPROCESS);
     Ob_DECREF_NULL(&ctxVmm->pObCCachePrefetchRegistry);
     Ob_DECREF_NULL(&ctxVmm->pObCacheMapEAT);
     Ob_DECREF_NULL(&ctxVmm->pObCacheMapIAT);
+    Ob_DECREF_NULL(&ctxVmm->pObCacheMapWinObjDisplay);
     DeleteCriticalSection(&ctxVmm->LockMaster);
     DeleteCriticalSection(&ctxVmm->LockPlugin);
     DeleteCriticalSection(&ctxVmm->LockUpdateMap);
@@ -2204,6 +1875,8 @@ BOOL VmmInitialize()
     ctxVmm->pObCMapEvil = ObContainer_New();
     ctxVmm->pObCMapUser = ObContainer_New();
     ctxVmm->pObCMapNet = ObContainer_New();
+    ctxVmm->pObCMapObject = ObContainer_New();
+    ctxVmm->pObCMapKDriver = ObContainer_New();
     ctxVmm->pObCMapService = ObContainer_New();
     ctxVmm->pObCCachePrefetchEPROCESS = ObContainer_New();
     ctxVmm->pObCCachePrefetchRegistry = ObContainer_New();
@@ -2216,4 +1889,383 @@ BOOL VmmInitialize()
 fail:
     VmmClose();
     return FALSE;
+}
+
+
+
+// ----------------------------------------------------------------------------
+// MAP FUNCTIONALITY BELOW: 
+// SUPPORTED MAPS: PTE, VAD, MODULE, HEAP
+// ----------------------------------------------------------------------------
+
+/*
+* Retrieve the PTE hardware page table memory map.
+* CALLER DECREF: ppObPteMap
+* -- pProcess
+* -- ppObPteMap
+* -- fExtendedText
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetPte(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_PTE *ppObPteMap, _In_ BOOL fExtendedText)
+{
+    return
+        (ctxVmm->tpMemoryModel != VMM_MEMORYMODEL_NA) &&
+        ctxVmm->fnMemoryModel.pfnPteMapInitialize(pProcess) &&
+        (!fExtendedText || VmmWinPte_InitializeMapText(pProcess)) &&
+        (*ppObPteMap = Ob_INCREF(pProcess->Map.pObPte));
+}
+
+/*
+* Retrieve the VAD extended memory map by range specified by iPage and cPage.
+* CALLER DECREF: ppObVadExMap
+* -- pProcess
+* -- ppObVadExMap
+* -- tpVmmVadMap = VMM_VADMAP_TP_*
+* -- iPage = index of range start in vad map.
+* -- cPage = number of pages, starting at iPage.
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetVadEx(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_VADEX *ppObVadExMap, _In_ VMM_VADMAP_TP tpVmmVadMap, _In_ DWORD iPage, _In_ DWORD cPage)
+{
+    *ppObVadExMap = MmVadEx_MapInitialize(pProcess, tpVmmVadMap, iPage, cPage);
+    return *ppObVadExMap != NULL;
+}
+
+/*
+* Retrieve the VAD memory map.
+* CALLER DECREF: ppObVadMap
+* -- pProcess
+* -- ppObVadMap
+* -- tpVmmVadMap = VMM_VADMAP_TP_*
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetVad(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_VAD *ppObVadMap, _In_ VMM_VADMAP_TP tpVmmVadMap)
+{
+    if(!MmVad_MapInitialize(pProcess, tpVmmVadMap, 0)) { return FALSE; }
+    *ppObVadMap = Ob_INCREF(pProcess->Map.pObVad);
+    return *ppObVadMap != NULL;
+}
+
+int VmmMap_GetVadEntry_CmpFind(_In_ QWORD vaFind, _In_ PVMM_MAP_VADENTRY pEntry)
+{
+    if(pEntry->vaStart > vaFind) { return -1; }
+    if(pEntry->vaEnd < vaFind) { return 1; }
+    return 0;
+}
+
+/*
+* Retrieve a single PVMM_MAP_VADENTRY for a given VadMap and address inside it.
+* -- pVadMap
+* -- va
+* -- return = PTR to VADENTRY or NULL on fail. Must not be used out of pVadMap scope.
+*/
+PVMM_MAP_VADENTRY VmmMap_GetVadEntry(_In_opt_ PVMMOB_MAP_VAD pVadMap, _In_ QWORD va)
+{
+    if(!pVadMap) { return NULL; }
+    return Util_qfind((PVOID)va, pVadMap->cMap, pVadMap->pMap, sizeof(VMM_MAP_VADENTRY), (int(*)(PVOID, PVOID))VmmMap_GetVadEntry_CmpFind);
+}
+
+/*
+* Retrieve the process module map.
+* CALLER DECREF: ppObModuleMap
+* -- pProcess
+* -- ppObModuleMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetModule(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap)
+{
+    if(!pProcess->Map.pObModule && !VmmWinLdrModule_Initialize(pProcess, NULL)) { return FALSE; }
+    *ppObModuleMap = Ob_INCREF(pProcess->Map.pObModule);
+    return *ppObModuleMap != NULL;
+}
+
+int VmmMap_HashTableLookup_CmpFind(_In_ DWORD qwHash, _In_ PDWORD pdwEntry)
+{
+    if(*pdwEntry > qwHash) { return -1; }
+    if(*pdwEntry < qwHash) { return 1; }
+    return 0;
+}
+
+/*
+* Retrieve a single PVMM_MAP_MODULEENTRY for a given ModuleMap and module name inside it.
+* -- pModuleMap
+* -- wszModuleName
+* -- return = PTR to VMM_MAP_MODULEENTRY or NULL on fail. Must not be used out of pModuleMap scope.
+*/
+PVMM_MAP_MODULEENTRY VmmMap_GetModuleEntry(_In_ PVMMOB_MAP_MODULE pModuleMap, _In_ LPWSTR wszModuleName)
+{
+    QWORD qwHash, *pqwHashIndex;
+    WCHAR wsz[MAX_PATH];
+    Util_PathFileNameFixW(wsz, wszModuleName, 0);
+    qwHash = Util_HashStringUpperW(wsz);
+    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pModuleMap->cMap, pModuleMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
+    return pqwHashIndex ? &pModuleMap->pMap[*pqwHashIndex >> 32] : NULL;
+}
+
+/*
+* Retrieve a single VMM_MAP_MODULEENTRY for a given process and module name.
+* CALLER DECREF: ppObModuleMap
+* -- pProcessOpt
+* -- dwPidOpt
+* -- wszModuleName
+* -- ppObModuleMap
+* -- pModuleEntry
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetModuleEntryEx(_In_opt_ PVMM_PROCESS pProcessOpt, _In_opt_ DWORD dwPidOpt, _In_ LPWSTR wszModuleName, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap, _Out_ PVMM_MAP_MODULEENTRY * pModuleEntry)
+{
+    PVMM_PROCESS pObProcess = pProcessOpt ? Ob_INCREF(pProcessOpt) : VmmProcessGet(dwPidOpt);
+    *ppObModuleMap = NULL;
+    *pModuleEntry = NULL;
+    if(VmmMap_GetModule(pObProcess, ppObModuleMap)) {
+        *pModuleEntry = VmmMap_GetModuleEntry(*ppObModuleMap, wszModuleName);
+        Ob_DECREF_NULL(&pObProcess);
+    }
+    return *pModuleEntry != NULL;
+}
+
+/*
+* Retrieve the process unloaded module map.
+* CALLER DECREF: ppObUnloadedModuleMap
+* -- pProcess
+* -- ppObUnloadedModuleMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetUnloadedModule(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_UNLOADEDMODULE *ppObUnloadedModuleMap)
+{
+    if(!pProcess->Map.pObUnloadedModule && !VmmWinUnloadedModule_Initialize(pProcess)) { return FALSE; }
+    *ppObUnloadedModuleMap = Ob_INCREF(pProcess->Map.pObUnloadedModule);
+    return *ppObUnloadedModuleMap != NULL;
+}
+
+/*
+* Retrieve the process module export address table (EAT) map.
+* CALLER DECREF: ppObEatMap
+* -- pProcess
+* -- pModule
+* -- ppObEatMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetEAT(_In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_MODULEENTRY pModuleEntry, _Out_ PVMMOB_MAP_EAT *ppObEatMap)
+{
+    *ppObEatMap = VmmWinEAT_Initialize(pProcess, pModuleEntry);
+    return *ppObEatMap != NULL;
+}
+
+/*
+* Retrieve the export entry index in pEatMap->pMap by function name.
+* -- pEatMap
+* -- wszFunctionName
+* -- pdwEntryIndex = pointer to receive the pEatMap->pMap index.
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetEATEntryIndexW(_In_ PVMMOB_MAP_EAT pEatMap, _In_ LPWSTR wszFunctionName, _Out_ PDWORD pdwEntryIndex)
+{
+    QWORD qwHash, *pqwHashIndex;
+    qwHash = Util_HashStringUpperW(wszFunctionName);
+    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pEatMap->cMap, pEatMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
+    *pdwEntryIndex = pqwHashIndex ? *pqwHashIndex >> 32 : 0;
+    return pqwHashIndex != NULL;
+}
+
+_Success_(return)
+BOOL VmmMap_GetEATEntryIndexA(_In_ PVMMOB_MAP_EAT pEatMap, _In_ LPSTR szFunctionName, _Out_ PDWORD pdwEntryIndex)
+{
+    QWORD qwHash, *pqwHashIndex;
+    qwHash = Util_HashStringUpperA(szFunctionName);
+    pqwHashIndex = (PQWORD)Util_qfind((PVOID)qwHash, pEatMap->cMap, pEatMap->pHashTableLookup, sizeof(QWORD), (int(*)(PVOID, PVOID))VmmMap_HashTableLookup_CmpFind);
+    *pdwEntryIndex = pqwHashIndex ? *pqwHashIndex >> 32 : 0;
+    return pqwHashIndex != NULL;
+}
+
+/*
+* Retrieve the process module import address table (IAT) map.
+* CALLER DECREF: ppObIatMap
+* -- pProcess
+* -- pModule
+* -- ppObIatMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetIAT(_In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_MODULEENTRY pModuleEntry, _Out_ PVMMOB_MAP_IAT *ppObIatMap)
+{
+    *ppObIatMap = VmmWinIAT_Initialize(pProcess, pModuleEntry);
+    return *ppObIatMap != NULL;
+}
+
+/*
+* Retrieve the heap map.
+* CALLER DECREF: ppObHeapMap
+* -- pProcess
+* -- ppObHeapMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetHeap(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_HEAP *ppObHeapMap)
+{
+    if(!pProcess->Map.pObHeap && !VmmWinHeap_Initialize(pProcess)) { return FALSE; }
+    *ppObHeapMap = Ob_INCREF(pProcess->Map.pObHeap);
+    return *ppObHeapMap != NULL;
+}
+
+/*
+* Retrieve the thread map.
+* CALLER DECREF: ppObThreadMap
+* -- pProcess
+* -- ppObThreadMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetThread(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_THREAD *ppObThreadMap)
+{
+    if(!pProcess->Map.pObThread && !VmmWinThread_Initialize(pProcess)) { return FALSE; }
+    *ppObThreadMap = Ob_INCREF(pProcess->Map.pObThread);
+    return *ppObThreadMap ? TRUE : FALSE;
+}
+
+int VmmMap_GetThreadEntry_CmpFind(_In_ DWORD dwTID, _In_ PVMM_MAP_THREADENTRY pEntry)
+{
+    if(pEntry->dwTID > dwTID) { return -1; }
+    if(pEntry->dwTID < dwTID) { return 1; }
+    return 0;
+}
+
+/*
+* Retrieve a single PVMM_MAP_THREADENTRY for a given ThreadMap and ThreadID.
+* -- pThreadMap
+* -- dwTID
+* -- return = PTR to VMM_MAP_THREADENTRY or NULL on fail. Must not be used out of pThreadMap scope.
+*/
+PVMM_MAP_THREADENTRY VmmMap_GetThreadEntry(_In_ PVMMOB_MAP_THREAD pThreadMap, _In_ DWORD dwTID)
+{
+    QWORD qwTID = dwTID;
+    return Util_qfind((PVOID)qwTID, pThreadMap->cMap, pThreadMap->pMap, sizeof(VMM_MAP_THREADENTRY), (int(*)(PVOID, PVOID))VmmMap_GetThreadEntry_CmpFind);
+}
+
+/*
+* Retrieve the HANDLE map
+* CALLER DECREF: ppObHandleMap
+* -- pProcess
+* -- ppObHandleMap
+* -- fExtendedText
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetHandle(_In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_HANDLE *ppObHandleMap, _In_ BOOL fExtendedText)
+{
+    if(!VmmWinHandle_Initialize(pProcess, fExtendedText)) { return FALSE; }
+    *ppObHandleMap = Ob_INCREF(pProcess->Map.pObHandle);
+    return *ppObHandleMap != NULL;
+}
+
+/*
+* Retrieve the EVIL map
+* CALLER DECREF: ppObEvilMap
+* -- pProcess = retrieve for specific process, or if NULL for all processes.
+* -- ppObEvilMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetEvil(_In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_EVIL *ppObEvilMap)
+{
+    *ppObEvilMap = VmmEvil_Initialize(pProcess);
+    return *ppObEvilMap != NULL;
+}
+
+/*
+* Retrieve the Physical Memory Map.
+* CALLER DECREF: ppObPhysMem
+* -- ppObPhysMem
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetPhysMem(_Out_ PVMMOB_MAP_PHYSMEM *ppObPhysMem)
+{
+    if(!(*ppObPhysMem = ObContainer_GetOb(ctxVmm->pObCMapPhysMem))) {
+        *ppObPhysMem = VmmWinPhysMemMap_Initialize();
+    }
+    return *ppObPhysMem != NULL;
+}
+
+/*
+* Retrieve the USER map
+* CALLER DECREF: ppObUserMap
+* -- ppObUserMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetUser(_Out_ PVMMOB_MAP_USER *ppObUserMap)
+{
+    if(!(*ppObUserMap = ObContainer_GetOb(ctxVmm->pObCMapUser))) {
+        *ppObUserMap = VmmWinUser_Initialize();
+    }
+    return *ppObUserMap != NULL;
+}
+
+/*
+* Retrieve the OBJECT MANAGER map
+* CALLER DECREF: ppObObjectMap
+* -- ppObObjectMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetObject(_Out_ PVMMOB_MAP_OBJECT *ppObObjectMap)
+{
+    if(!(*ppObObjectMap = ObContainer_GetOb(ctxVmm->pObCMapObject))) {
+        *ppObObjectMap = VmmWinObjMgr_Initialize();
+    }
+    return *ppObObjectMap != NULL;
+}
+
+/*
+* Retrieve the KERNEL DRIVER map
+* CALLER DECREF: ppObKDriverMap
+* -- ppObKDriverMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetKDriver(_Out_ PVMMOB_MAP_KDRIVER *ppObKDriverMap)
+{
+    if(!(*ppObKDriverMap = ObContainer_GetOb(ctxVmm->pObCMapKDriver))) {
+        *ppObKDriverMap = VmmWinObjKDrv_Initialize();
+    }
+    return *ppObKDriverMap != NULL;
+}
+
+/*
+* Retrieve the NETWORK CONNECTION map
+* CALLER DECREF: ppObNetMap
+* -- ppObNetMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetNet(_Out_ PVMMOB_MAP_NET *ppObNetMap)
+{
+    if(!(*ppObNetMap = ObContainer_GetOb(ctxVmm->pObCMapNet))) {
+        *ppObNetMap = VmmNet_Initialize();
+    }
+    return *ppObNetMap != NULL;
+}
+
+/*
+* Retrieve the SERVICES map
+* CALLER DECREF: ppObServiceMap
+* -- ppObServiceMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetService(_Out_ PVMMOB_MAP_SERVICE *ppObServiceMap)
+{
+    if(!(*ppObServiceMap = ObContainer_GetOb(ctxVmm->pObCMapService))) {
+        *ppObServiceMap = VmmWinSvc_Initialize();
+    }
+    return *ppObServiceMap != NULL;
 }

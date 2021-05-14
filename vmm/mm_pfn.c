@@ -1,7 +1,7 @@
 // mm_pfn.c : implementation of Windows PFN (page frame number) functionality and
 //            related physical memory functionality.
 //
-// (c) Ulf Frisk, 2020
+// (c) Ulf Frisk, 2020-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmm.h"
@@ -29,6 +29,7 @@ typedef struct tdOB_MMPFN_CONTEXT {
 
 VOID MmPfn_CallbackCleanup_ObContext(POB_MMPFN_CONTEXT ctx)
 {
+    Ob_DECREF(ctx->pObCProcTableDTB);
     DeleteCriticalSection(&ctx->Lock);
 }
 

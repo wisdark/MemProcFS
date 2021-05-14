@@ -1,7 +1,7 @@
 // vmmdll.c : implementation of core dynamic link library (dll) functionality
 // of the virtual memory manager (VMM) for The Memory Process File System.
 //
-// (c) Ulf Frisk, 2018-2020
+// (c) Ulf Frisk, 2018-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -92,6 +92,10 @@ BOOL VmmDll_ConfigIntialize(_In_ DWORD argc, _In_ char* argv[])
             ctxMain->cfg.fDisableSymbolServerOnStartup = TRUE;
             i++;
             continue;
+        } else if(0 == _stricmp(argv[i], "-pythondisable")) {
+            ctxMain->cfg.fDisablePython = TRUE;
+            i++;
+            continue;
         } else if(0 == _stricmp(argv[i], "-norefresh")) {
             ctxMain->cfg.fDisableBackgroundRefresh = TRUE;
             i++;
@@ -160,6 +164,7 @@ BOOL VmmDll_ConfigIntialize(_In_ DWORD argc, _In_ char* argv[])
         // disable memory auto-detect when memmap is specified
         ctxMain->dev.paMax = -1;
     }
+    ctxMain->cfg.fFileInfoHeader = TRUE;
     ctxMain->cfg.fVerbose = ctxMain->cfg.fVerbose && ctxMain->cfg.fVerboseDll;
     ctxMain->cfg.fVerboseExtra = ctxMain->cfg.fVerboseExtra && ctxMain->cfg.fVerboseDll;
     ctxMain->cfg.fVerboseExtraTlp = ctxMain->cfg.fVerboseExtraTlp && ctxMain->cfg.fVerboseDll;
@@ -181,8 +186,8 @@ VOID VmmDll_PrintHelp()
         " PCILeech if pcileech.dll is placed in the application directory. For infor-   \n" \
         " mation about PCILeech please consult the separate PCILeech documentation.     \n" \
         " -----                                                                         \n" \
-        " The Memory Process File System (c) 2018-2019 Ulf Frisk                        \n" \
-        " License: GNU GENERAL PUBLIC LICENSE - Version 3, 29 June 2007                 \n" \
+        " The Memory Process File System (c) 2018-2021 Ulf Frisk                        \n" \
+        " License: GNU Affero General Public License v3.0                               \n" \
         " Contact information: pcileech@frizk.net                                       \n" \
         " The Memory Process File System: https://github.com/ufrisk/MemProcFS           \n" \
         " LeechCore:                      https://github.com/ufrisk/LeechCore           \n" \
@@ -230,6 +235,8 @@ VOID VmmDll_PrintHelp()
         "   -pythonpath : specify the path to a python 3 installation for Windows.      \n" \
         "          The path given should be to the directory that contain: python.dll   \n" \
         "          Example: -pythonpath \"C:\\Program Files\\Python37\"                 \n" \
+        "   -pythondisable : prevent/disable the python plugin sub-system from loading. \n" \
+        "          Example: -pythondisable                                              \n" \
         "   -mount : drive letter to mount The Memory Process File system at.           \n" \
         "          default: M   Example: -mount Q                                       \n" \
         "   -norefresh : disable automatic cache and processes refreshes even when      \n" \
@@ -520,6 +527,9 @@ BOOL VMMDLL_ConfigGet(_In_ ULONG64 fOption, _Out_ PULONG64 pqwValue)
         case VMMDLL_OPT_WIN_VERSION_BUILD:
             *pqwValue = ctxVmm->kernel.dwVersionBuild;
             return TRUE;
+        case VMMDLL_OPT_WIN_SYSTEM_UNIQUE_ID:
+            *pqwValue = ctxVmm->dwSystemUniqueId;
+            return TRUE;
         case VMMDLL_OPT_FORENSIC_MODE:
             *pqwValue = ctxFc ? (BYTE)ctxFc->db.tp : 0;
             return TRUE;
@@ -640,30 +650,6 @@ BOOL VMMDLL_ConfigSet(_In_ ULONG64 fOption, _In_ ULONG64 qwValue)
 //-----------------------------------------------------------------------------
 
 _Success_(return)
-BOOL VMMDLL_VfsHelper_GetPidDir(_In_ LPWSTR wszPath, _Out_ PDWORD pdwPID, _Out_ LPWSTR * pwszSubPath)
-{
-    DWORD i = 0, iSubPath = 0;
-    // 1: Check if starting with PID or NAME
-    if(!wcsncmp(wszPath, L"pid\\", 4)) {
-        i = 4;
-    } else if(!wcsncmp(wszPath, L"name\\", 5)) {
-        i = 5;
-    } else {
-        return FALSE;
-    }
-    // 3: Locate start of PID number and 1st Path item (if any)
-    while((i < MAX_PATH) && wszPath[i] && (wszPath[i] != '\\')) { i++; }
-    iSubPath = ((i < MAX_PATH - 1) && (wszPath[i] == '\\')) ? (i + 1) : i;
-    i--;
-    while((wszPath[i] >= '0') && (wszPath[i] <= '9')) { i--; }
-    i++;
-    if(!((wszPath[i] >= '0') && (wszPath[i] <= '9'))) { return FALSE; }
-    *pdwPID = wcstoul(wszPath + i, NULL, 10);
-    *pwszSubPath = wszPath + iSubPath;
-    return TRUE;
-}
-
-_Success_(return)
 BOOL VMMDLL_VfsList_Impl_ProcessRoot(_In_ BOOL fNamePID, _Inout_ PHANDLE pFileList)
 {
     PVMM_PROCESS pObProcess = NULL;
@@ -694,7 +680,7 @@ BOOL VMMDLL_VfsList_Impl(_In_ LPWSTR wszPath, _Inout_ PHANDLE pFileList)
     PVMM_PROCESS pObProcess;
     if(!ctxVmm || !VMMDLL_VfsList_IsHandleValid(pFileList)) { return FALSE; }
     if(wszPath[0] == '\\') { wszPath++; }
-    if(VMMDLL_VfsHelper_GetPidDir(wszPath, &dwPID, &wszSubPath)) {
+    if(Util_VfsHelper_GetIdDir(wszPath, &dwPID, &wszSubPath)) {
         if(!(pObProcess = VmmProcessGet(dwPID))) { return FALSE; }
         PluginManager_List(pObProcess, wszSubPath, pFileList);
         Ob_DECREF(pObProcess);
@@ -728,7 +714,7 @@ NTSTATUS VMMDLL_VfsRead_Impl(LPWSTR wszPath, _Out_writes_to_(cb, *pcbRead) PBYTE
     PVMM_PROCESS pObProcess;
     if(!ctxVmm) { return VMM_STATUS_FILE_INVALID; }
     if(wszPath[0] == '\\') { wszPath++; }
-    if(VMMDLL_VfsHelper_GetPidDir(wszPath, &dwPID, &wszSubPath)) {
+    if(Util_VfsHelper_GetIdDir(wszPath, &dwPID, &wszSubPath)) {
         if(!(pObProcess = VmmProcessGet(dwPID))) { return VMM_STATUS_FILE_INVALID; }
         nt = PluginManager_Read(pObProcess, wszSubPath, pb, cb, pcbRead, cbOffset);
         Ob_DECREF(pObProcess);
@@ -754,7 +740,7 @@ NTSTATUS VMMDLL_VfsWrite_Impl(_In_ LPWSTR wszPath, _In_reads_(cb) PBYTE pb, _In_
     PVMM_PROCESS pObProcess;
     if(!ctxVmm) { return VMM_STATUS_FILE_INVALID; }
     if(wszPath[0] == '\\') { wszPath++; }
-    if(VMMDLL_VfsHelper_GetPidDir(wszPath, &dwPID, &wszSubPath)) {
+    if(Util_VfsHelper_GetIdDir(wszPath, &dwPID, &wszSubPath)) {
         if(!(pObProcess = VmmProcessGet(dwPID))) { return VMM_STATUS_FILE_INVALID; }
         nt = PluginManager_Write(pObProcess, wszSubPath, pb, cb, pcbWrite, cbOffset);
         Ob_DECREF(pObProcess);
@@ -1584,6 +1570,7 @@ BOOL VMMDLL_Map_GetServices_Impl(_Out_writes_bytes_opt_(*pcbServiceMap) PVMMDLL_
             peDst->wszPath        = (LPWSTR)(cbMultiTextDiff + (QWORD)peSrc->wszPath);
             peDst->wszUserTp      = (LPWSTR)(cbMultiTextDiff + (QWORD)peSrc->wszUserTp);
             peDst->wszUserAcct    = (LPWSTR)(cbMultiTextDiff + (QWORD)peSrc->wszUserAcct);
+            peDst->wszImagePath   = (LPWSTR)(cbMultiTextDiff + (QWORD)peSrc->wszImagePath);
         }
     }
     fResult = TRUE;
@@ -2017,10 +2004,18 @@ BOOL VMMDLL_WinReg_EnumKeyExW_Impl(_In_ LPWSTR wszFullPathKey, _In_ DWORD dwInde
         return FALSE;
     }
     f = VmmWinReg_PathHiveGetByFullPath(wszFullPathKey, &pObHive, wszPathKey) &&
-        (pObKey = VmmWinReg_KeyGetByPath(pObHive, wszPathKey)) &&
-        (pmObSubKeys = VmmWinReg_KeyList(pObHive, pObKey)) &&
-        (pObSubKey = ObMap_GetByIndex(pmObSubKeys, dwIndex));
-    if(f) { VmmWinReg_KeyInfo(pObHive, pObSubKey, &KeyInfo); }
+        (pObKey = VmmWinReg_KeyGetByPath(pObHive, wszPathKey));
+    if(f) {
+        if(f && (dwIndex == (DWORD)-1)) {
+            // actual key
+            VmmWinReg_KeyInfo(pObHive, pObKey, &KeyInfo);
+        } else {
+            // subkeys
+            f = (pmObSubKeys = VmmWinReg_KeyList(pObHive, pObKey)) &&
+                (pObSubKey = ObMap_GetByIndex(pmObSubKeys, dwIndex));
+            if(f) { VmmWinReg_KeyInfo(pObHive, pObSubKey, &KeyInfo); }
+        }
+    }
     f = f && (!lpName || (KeyInfo.cchName <= *lpcchName));
     if(lpName) { wcsncpy_s(lpName, *lpcchName, KeyInfo.wszName, _TRUNCATE); };
     if(lpftLastWriteTime) { *(PQWORD)lpftLastWriteTime = KeyInfo.ftLastWrite; }
@@ -2136,7 +2131,7 @@ BOOL VMMDLL_PdbLoad_Impl(_In_ DWORD dwPID, _In_ ULONG64 vaModuleBase, _Out_write
     fResult =
         (hPdb = PDB_GetHandleFromModuleAddress(pObProcess, vaModuleBase)) &&
         PDB_LoadEnsure(hPdb) &&
-        PDB_GetModuleName(hPdb, szModuleName);
+        PDB_GetModuleInfo(hPdb, szModuleName, NULL, NULL);
     Ob_DECREF(pObProcess);
     return fResult;
 }
@@ -2150,18 +2145,25 @@ BOOL VMMDLL_PdbLoad(_In_ DWORD dwPID, _In_ ULONG64 vaModuleBase, _Out_writes_(MA
 }
 
 _Success_(return)
-BOOL VMMDLL_PdbSymbolName_Impl(_In_ LPSTR szModule, _In_ DWORD cbSymbolOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement)
+BOOL VMMDLL_PdbSymbolName_Impl(_In_ LPSTR szModule, _In_ QWORD cbSymbolAddressOrOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement)
 {
+    DWORD cbPdbModuleSize = 0;
+    QWORD vaPdbModuleBase = 0;
     PDB_HANDLE hPdb = PDB_GetHandleFromModuleName(szModule);
-    return PDB_GetSymbolFromOffset(hPdb, cbSymbolOffset, szSymbolName, pdwSymbolDisplacement);
+    if(PDB_GetModuleInfo(hPdb, NULL, &vaPdbModuleBase, &cbPdbModuleSize)) {
+        if((vaPdbModuleBase <= cbSymbolAddressOrOffset) && (vaPdbModuleBase + cbPdbModuleSize >= cbSymbolAddressOrOffset)) {
+            cbSymbolAddressOrOffset -= vaPdbModuleBase;     // cbSymbolAddressOrOffset is absolute address
+        }
+    }
+    return PDB_GetSymbolFromOffset(hPdb, (DWORD)cbSymbolAddressOrOffset, szSymbolName, pdwSymbolDisplacement);
 }
 
 _Success_(return)
-BOOL VMMDLL_PdbSymbolName(_In_ LPSTR szModule, _In_ DWORD cbSymbolOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement)
+BOOL VMMDLL_PdbSymbolName(_In_ LPSTR szModule, _In_ QWORD cbSymbolAddressOrOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement)
 {
     CALL_IMPLEMENTATION_VMM(
         STATISTICS_ID_VMMDLL_PdbSymbolName,
-        VMMDLL_PdbSymbolName_Impl(szModule, cbSymbolOffset, szSymbolName, pdwSymbolDisplacement))
+        VMMDLL_PdbSymbolName_Impl(szModule, cbSymbolAddressOrOffset, szSymbolName, pdwSymbolDisplacement))
 }
 
 _Success_(return)

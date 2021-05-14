@@ -7,13 +7,13 @@
 #
 # https://github.com/ufrisk/
 #
-# (c) Ulf Frisk, 2019-2020
+# (c) Ulf Frisk, 2019-2021
 # Author: Ulf Frisk, pcileech@frizk.net
 #
 
 import os
 import time
-from vmmpy import *
+import memprocfs
 from vmmpyplugin import *
 from threading import Thread
 
@@ -160,7 +160,7 @@ def GetPluginFromName(file_name):
 
 
 
-def WriteFile(pid, file_name, file_attr, bytes_data, bytes_offset):
+def WriteFile(pid, file_path, file_name, file_attr, bytes_data, bytes_offset):
     # Write triggers installation/upgrade of the identified plugin.
     plugin_name, plugin_is_install = GetPluginFromName(file_name)
     try:
@@ -183,7 +183,7 @@ def WriteFile(pid, file_name, file_attr, bytes_data, bytes_offset):
 
 
 
-def ReadFile(pid, file_name, file_attr, bytes_length, bytes_offset):
+def ReadFile(pid, file_path, file_name, file_attr, bytes_length, bytes_offset):
     # Read plugin-dependant file contents for installation information or upgrade information.
     plugin_name, plugin_is_install = GetPluginFromName(file_name)
     return plugins[plugin_name]['text_install' if plugin_is_install else 'text_upgrade'].encode()[bytes_offset:bytes_offset+bytes_length]

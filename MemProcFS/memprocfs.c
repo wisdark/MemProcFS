@@ -1,7 +1,7 @@
 // memprocfs.h : implementation of core functionality for the Memory Process File System
 // This is just a thin loader for the virtual memory manager dll which contains the logic.
 //
-// (c) Ulf Frisk, 2018-2020
+// (c) Ulf Frisk, 2018-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include <Windows.h>
@@ -45,7 +45,8 @@ VOID MemProcFsCtrlHandler_TryShutdownThread(PVOID pv)
     HMODULE hModuleVmm;
     BOOL(*VMMDLL_Close)();
     __try {
-        VfsClose(g_VfsMountPoint);
+        VfsDokan_Close(g_VfsMountPoint);
+        VfsList_Close();
     } __except(EXCEPTION_EXECUTE_HANDLER) { ; }
     __try {
         hModuleVmm = GetModuleHandleA("vmm.dll");
@@ -71,7 +72,7 @@ BOOL WINAPI MemProcFsCtrlHandler(DWORD fdwCtrlType)
     if (fdwCtrlType == CTRL_C_EVENT) {
         printf("CTRL+C detected - shutting down ...\n");
         hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MemProcFsCtrlHandler_TryShutdownThread, NULL, 0, NULL);
-		if(hThread) { WaitForSingleObject(hThread, 500); }
+		if(hThread) { WaitForSingleObject(hThread, INFINITE); }
         TerminateProcess(GetCurrentProcess(), 1);
         Sleep(1000);
         ExitProcess(1);
@@ -138,9 +139,10 @@ int main(_In_ int argc, _In_ char* argv[])
         printf("MemProcFS: Error file system plugins in vmm.dll!\n");
         return 1;
     }
+    VfsList_Initialize(hVMM, 500, 128);
     SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
     g_VfsMountPoint = GetMountPoint(argc, argv);
-    VfsInitializeAndMount(g_VfsMountPoint, &VmmDll);
+    VfsDokan_InitializeAndMount(g_VfsMountPoint, &VmmDll);
     CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MemProcFsCtrlHandler_TryShutdownThread, NULL, 0, NULL);
     Sleep(250);
     TerminateProcess(GetCurrentProcess(), 1);

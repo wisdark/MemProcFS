@@ -11,10 +11,10 @@ using System.Collections.Generic;
  *  Please consult the C/C++ header files vmmdll.h and leechcore.h for information about
  *  parameters and API usage.
  *  
- *  (c) Ulf Frisk, 2020
+ *  (c) Ulf Frisk, 2020-2021
  *  Author: Ulf Frisk, pcileech@frizk.net
  *  
- *  Version 3.6
+ *  Version 3.10
  *  
  */
 
@@ -728,14 +728,14 @@ namespace vmmsharp
             return true;
         }
 
-        public static unsafe bool PdbSymbolName(string szModule, uint cbSymbolOffset, out string szSymbolName, out uint pdwSymbolDisplacement)
+        public static unsafe bool PdbSymbolName(string szModule, ulong cbSymbolAddressOrOffset, out string szSymbolName, out uint pdwSymbolDisplacement)
         {
             szSymbolName = "";
             pdwSymbolDisplacement = 0;
             byte[] data = new byte[260];
             fixed (byte* pb = data)
             {
-                bool result = vmmi.VMMDLL_PdbSymbolName(szModule, cbSymbolOffset, pb, out pdwSymbolDisplacement);
+                bool result = vmmi.VMMDLL_PdbSymbolName(szModule, cbSymbolAddressOrOffset, pb, out pdwSymbolDisplacement);
                 if (!result) { return false; }
                 szSymbolName = Encoding.UTF8.GetString(data);
                 szSymbolName = szSymbolName.Substring(0, szSymbolName.IndexOf((char)0));
@@ -768,6 +768,8 @@ namespace vmmsharp
         public struct MAP_PTEENTRY
         {
             public ulong vaBase;
+            public ulong vaEnd;
+            public ulong cbSize;
             public ulong cPages;
             public ulong fPage;
             public bool fWoW64;
@@ -780,6 +782,7 @@ namespace vmmsharp
             public ulong vaStart;
             public ulong vaEnd;
             public ulong vaVad;
+            public ulong cbSize;
             public uint VadType;
             public uint Protection;
             public bool fImage;
@@ -984,6 +987,7 @@ namespace vmmsharp
             public string wszPath;
             public string wszUserTp;
             public string wszUserAcct;
+            public string wszImagePath;
             public uint dwStartType;
             public uint dwServiceType;
             public uint dwCurrentState;
@@ -1054,6 +1058,8 @@ namespace vmmsharp
                     vmmi.VMMDLL_MAP_PTEENTRY n = Marshal.PtrToStructure<vmmi.VMMDLL_MAP_PTEENTRY>((System.IntPtr)(pb + cbMAP + i * cbENTRY));
                     MAP_PTEENTRY e;
                     e.vaBase = n.vaBase;
+                    e.vaEnd = n.vaBase + (n.cPages << 12) - 1;
+                    e.cbSize = n.cPages << 12;
                     e.cPages = n.cPages;
                     e.fPage = n.fPage;
                     e.fWoW64 = n.fWoW64;
@@ -1086,6 +1092,7 @@ namespace vmmsharp
                     MAP_VADENTRY e;
                     e.vaStart = n.vaStart;
                     e.vaEnd = n.vaEnd;
+                    e.cbSize = n.vaEnd + 1 - n.vaStart;
                     e.vaVad = n.vaVad;
                     e.VadType = n.dw0 & 0x07;
                     e.Protection = (n.dw0 >> 3) & 0x1f;
@@ -1556,6 +1563,7 @@ namespace vmmsharp
                     e.wszPath = n.wszPath;
                     e.wszUserTp = n.wszUserTp;
                     e.wszUserAcct = n.wszUserAcct;
+                    e.wszImagePath = n.wszImagePath;
                     e.dwStartType = n.dwStartType;
                     e.dwServiceType = n.dwServiceType;
                     e.dwCurrentState = n.dwCurrentState;
@@ -1835,7 +1843,7 @@ namespace vmmsharp
         internal static uint VMMDLL_MAP_PHYSMEM_VERSION =    1;
         internal static uint VMMDLL_MAP_USER_VERSION =       1;
         internal static uint VMMDLL_MAP_PFN_VERSION =        1;
-        internal static uint VMMDLL_MAP_SERVICE_VERSION =    1;
+        internal static uint VMMDLL_MAP_SERVICE_VERSION =    2;
 
 
 
@@ -2023,7 +2031,7 @@ namespace vmmsharp
         [DllImport("vmm.dll", EntryPoint = "VMMDLL_PdbSymbolName")]
         internal static extern unsafe bool VMMDLL_PdbSymbolName(
             [MarshalAs(UnmanagedType.LPStr)] string szModule,
-            uint cbSymbolOffset,
+            ulong cbSymbolAddressOrOffset,
             byte* szSymbolName,
             out uint pdwSymbolDisplacement);
 
@@ -2526,6 +2534,7 @@ namespace vmmsharp
             [MarshalAs(UnmanagedType.LPWStr)] internal string wszPath;
             [MarshalAs(UnmanagedType.LPWStr)] internal string wszUserTp;
             [MarshalAs(UnmanagedType.LPWStr)] internal string wszUserAcct;
+            [MarshalAs(UnmanagedType.LPWStr)] internal string wszImagePath;
             internal uint dwPID;
             internal uint _FutureUse1;
             internal ulong _FutureUse2;

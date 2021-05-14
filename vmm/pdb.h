@@ -2,7 +2,7 @@
 //         for debug symbols and automatic retrieval from the Microsoft Symbol
 //         Server. (Windows exclusive functionality).
 //
-// (c) Ulf Frisk, 2019-2020
+// (c) Ulf Frisk, 2019-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __PDB_H__
@@ -67,20 +67,20 @@ _Success_(return)
 BOOL PDB_LoadEnsure(_In_opt_ PDB_HANDLE hPDB);
 
 /*
-* Return the module name given a PDB handle.
+* Return module information given a PDB handle.
 * -- hPDB
 * -- szModuleName = buffer to receive module name upon success.
+* -- pvaModuleBase
+* -- pcbModuleSize
 * -- return
 */
 _Success_(return)
-BOOL PDB_GetModuleName(_In_opt_ PDB_HANDLE hPDB, _Out_writes_(MAX_PATH) LPSTR szModuleName);
+BOOL PDB_GetModuleInfo(_In_opt_ PDB_HANDLE hPDB, _Out_writes_opt_(MAX_PATH) LPSTR szModuleName, _Out_opt_ PQWORD pvaModuleBase, _Out_opt_ PDWORD pcbModuleSize);
 
 /*
-* Query the PDB for the offset of a symbol. If szSymbolName contains wildcard
-* '?*' characters and matches multiple symbols the offset of the 1st symbol is
-* returned.
+* Query the PDB for the offset of a symbol.
 * -- hPDB
-* -- szSymbolName = wildcard symbol name
+* -- szSymbolName
 * -- pdwSymbolOffset
 * -- return
 */
@@ -88,11 +88,9 @@ _Success_(return)
 BOOL PDB_GetSymbolOffset(_In_opt_ PDB_HANDLE hPDB, _In_ LPSTR szSymbolName, _Out_ PDWORD pdwSymbolOffset);
 
 /*
-* Query the PDB for the offset of a symbol and return its virtual address. If
-* szSymbolName contains wildcard '?*' characters and matches multiple symbols
-* the virtual address of the 1st symbol is returned.
+* Query the PDB for the offset of a symbol and return its virtual address.
 * -- hPDB
-* -- szSymbolName = wildcard symbol name
+* -- szSymbolName
 * -- pvaSymbolAddress
 * -- return
 */
@@ -112,12 +110,10 @@ _Success_(return)
 BOOL PDB_GetSymbolFromOffset(_In_opt_ PDB_HANDLE hPDB, _In_ DWORD dwSymbolOffset, _Out_writes_opt_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement);
 
 /*
-* Read memory at the PDB acquired symbol offset. If szSymbolName contains
-* wildcard '?*' characters and matches multiple symbols the offset of the
-* 1st symbol is used to read the memory.
+* Read memory at the PDB acquired symbol offset.
 * Functions PDB_GetSymbolQWORD and PDB_GetSymbolDWORD behave similarly.
 * -- hPDB
-* -- szSymbolName = wildcard symbol name
+* -- szSymbolName
 * -- pProcess
 * -- pb
 * -- cb
@@ -197,5 +193,35 @@ BOOL PDB_GetTypeChildOffset(_In_opt_ PDB_HANDLE hPDB, _In_ LPSTR szTypeName, _In
 
 _Success_(return)
 BOOL PDB_GetTypeChildOffsetShort(_In_opt_ PDB_HANDLE hPDB, _In_ LPSTR szTypeName, _In_ LPWSTR wszTypeChildName, _Out_ PWORD pwTypeOffset);
+
+/*
+* Fetch the ntoskrnl.exe type information from the PDB symbols and return it in
+* a human readable utf-8 string. Caller is responsible for LocalFree().
+* Please also note that this function is single-threaded by an internal lock.
+* CALLER LocalFree: *pszResult
+* -- szTypeName = the name of the type - only types within ntosknl.exe are allowed.
+* -- cLevelMax = recurse into sub-types to cLevelMax.
+* -- vaType = optional kernel address in SYSTEM process address space where to
+*             load optional data from.
+* -- fHexAscii = append object bytes as hexascii at the end of the string.
+* -- fObjHeader = fetch object header instead of object.
+* -- pszResult = optional ptr to receive the utf-8 string data
+*                (function allocated - callee free)
+* -- pcbResult = optional ptr to receive the byte length of the returned string
+*                (including terminating null character).
+* -- pcbType
+* -- return
+*/
+_Success_(return)
+BOOL PDB_DisplayTypeNt(
+    _In_ LPSTR szTypeName,
+    _In_ BYTE cLevelMax,
+    _In_opt_ QWORD vaType,
+    _In_ BOOL fHexAscii,
+    _In_ BOOL fObjHeader,
+    _Out_opt_ LPSTR * pszResult,
+    _Out_opt_ PDWORD pcbResult,
+    _Out_opt_ PDWORD pcbType
+);
 
 #endif /* __PDB_H__ */

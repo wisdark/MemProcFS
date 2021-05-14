@@ -1,10 +1,10 @@
 // vmmdll.h : header file to include in projects that use vmm.dll either as
 // stand-alone projects or as native plugins to vmm.dll.
 //
-// (c) Ulf Frisk, 2018-2020
+// (c) Ulf Frisk, 2018-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
-// Header Version: 3.6
+// Header Version: 3.10
 //
 
 #include <windows.h>
@@ -127,6 +127,7 @@ VOID VMMDLL_MemFree(_Frees_ptr_opt_ PVOID pvMem);
 #define VMMDLL_OPT_WIN_VERSION_MAJOR                    0x20000101'00000000  // R
 #define VMMDLL_OPT_WIN_VERSION_MINOR                    0x20000102'00000000  // R
 #define VMMDLL_OPT_WIN_VERSION_BUILD                    0x20000103'00000000  // R
+#define VMMDLL_OPT_WIN_SYSTEM_UNIQUE_ID                 0x20000104'00000000  // R
 
 #define VMMDLL_OPT_FORENSIC_MODE                        0x20000201'00000000  // RW - enable/retrieve forensic mode type [0-4].
 
@@ -244,6 +245,11 @@ inline VOID VMMDLL_VfsList_AddFile(_In_ HANDLE pFileList, _In_ LPWSTR wszName, _
     ((PVMMDLL_VFS_FILELIST)pFileList)->pfnAddFile(((PVMMDLL_VFS_FILELIST)pFileList)->h, wszName, cb, pExInfo);
 }
 
+inline VOID VMMDLL_VfsList_AddFile_NOZERO(_In_ HANDLE pFileList, _In_ LPWSTR wszName, _In_ ULONG64 cb, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
+{
+    if(cb) { VMMDLL_VfsList_AddFile(pFileList, wszName, cb, pExInfo); }
+}
+
 inline VOID VMMDLL_VfsList_AddDirectory(_In_ HANDLE pFileList, _In_ LPWSTR wszName, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
 {
     ((PVMMDLL_VFS_FILELIST)pFileList)->pfnAddDirectory(((PVMMDLL_VFS_FILELIST)pFileList)->h, wszName, pExInfo);
@@ -324,9 +330,10 @@ _Success_(return)
 BOOL VMMDLL_InitializePlugins();
 
 #define VMMDLL_PLUGIN_CONTEXT_MAGIC                 0xc0ffee663df9301c
-#define VMMDLL_PLUGIN_CONTEXT_VERSION               3
+#define VMMDLL_PLUGIN_CONTEXT_VERSION               4
 #define VMMDLL_PLUGIN_REGINFO_MAGIC                 0xc0ffee663df9301d
-#define VMMDLL_PLUGIN_REGINFO_VERSION               9
+#define VMMDLL_PLUGIN_REGINFO_VERSION               13
+#define VMMDLL_PLUGIN_FORENSIC_JSONDATA_VERSION     0xc0ee0001
 
 #define VMMDLL_PLUGIN_NOTIFY_VERBOSITYCHANGE        0x01
 #define VMMDLL_PLUGIN_NOTIFY_REFRESH_FAST           0x05    // refresh fast event   - at partial process refresh.
@@ -335,6 +342,8 @@ BOOL VMMDLL_InitializePlugins();
 
 #define VMMDLL_PLUGIN_NOTIFY_FORENSIC_INIT          0x01000100
 #define VMMDLL_PLUGIN_NOTIFY_FORENSIC_INIT_COMPLETE 0x01000200
+
+typedef HANDLE                                      *PVMMDLL_PLUGIN_INTERNAL_CONTEXT;
 
 typedef struct tdVMMDLL_PLUGIN_CONTEXT {
     ULONG64 magic;
@@ -345,8 +354,28 @@ typedef struct tdVMMDLL_PLUGIN_CONTEXT {
     LPWSTR wszModule;
     LPWSTR wszPath;
     PVOID pvReserved1;
-    PVOID pvReserved2;
+    PVMMDLL_PLUGIN_INTERNAL_CONTEXT ctxM;       // optional internal module context.
 } VMMDLL_PLUGIN_CONTEXT, *PVMMDLL_PLUGIN_CONTEXT;
+
+typedef struct tdVMMDLL_PLUGIN_FORENSIC_JSONDATA {
+    DWORD dwVersion;        // must equal VMMDLL_PLUGIN_FORENSIC_JSONDATA_VERSION
+    BOOL fVerbose;
+    LPSTR szjType;          // log type/name (json encoded)
+    DWORD i;
+    DWORD dwPID;
+    QWORD vaObj;
+    BOOL fva[2];            // log va even if zero
+    QWORD va[2];
+    BOOL fNum[2];           // log num even if zero
+    QWORD qwNum[2];
+    BOOL fHex[2];           // log hex even if zero
+    QWORD qwHex[2];
+    // str: will be prioritized in order: szj > szu > wsz.
+    LPCSTR szj[2];          // str: json encoded
+    LPCSTR szu[2];          // str: utf-8 encoded
+    LPCWSTR wsz[2];         // str: wide
+    BYTE _Reserved[0x4000+256];
+} VMMDLL_PLUGIN_FORENSIC_JSONDATA, *PVMMDLL_PLUGIN_FORENSIC_JSONDATA;
 
 typedef struct tdVMMDLL_PLUGIN_FORENSIC_INGEST_PHYSMEM {
     DWORD cMEMs;
@@ -363,12 +392,18 @@ typedef struct tdVMMDLL_PLUGIN_REGINFO {
     VMMDLL_MEMORYMODEL_TP tpMemoryModel;
     VMMDLL_SYSTEM_TP tpSystem;
     HMODULE hDLL;
-    HMODULE hReservedDllPython3X;   // not for general use (only used for python).
     BOOL(*pfnPluginManager_Register)(struct tdVMMDLL_PLUGIN_REGINFO *pPluginRegInfo);
-    HMODULE hReservedDllPython3;    // not for general use (only used for python).
-    PVOID pvReserved2;
+    DWORD _Reserved[32];
+    // python plugin information - not for general use
+    struct {
+        BOOL fPythonStandalone;
+        DWORD _Reserved;
+        HMODULE hReservedDllPython3;
+        HMODULE hReservedDllPython3X;
+    } python;
     // general plugin registration info to be filled out by the plugin below:
     struct {
+        PVMMDLL_PLUGIN_INTERNAL_CONTEXT ctxM;   // optional internal module context [must be cleaned by pfnClose() call].
         WCHAR wszPathName[128];
         BOOL fRootModule;
         BOOL fProcessModule;
@@ -377,16 +412,16 @@ typedef struct tdVMMDLL_PLUGIN_REGINFO {
         CHAR sTimelineNameShort[6];
         CHAR _Reserved[2];
         CHAR szTimelineFileUTF8[32];
-        CHAR szTimelineFileJSON[32];
+        CHAR _Reserved2[32];
     } reg_info;
     // function plugin registration info to be filled out by the plugin below:
     struct {
-        BOOL(*pfnList)(_In_ PVMMDLL_PLUGIN_CONTEXT ctx, _Inout_ PHANDLE pFileList);
-        NTSTATUS(*pfnRead)(_In_ PVMMDLL_PLUGIN_CONTEXT ctx, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead,  _In_ ULONG64 cbOffset);
-        NTSTATUS(*pfnWrite)(_In_ PVMMDLL_PLUGIN_CONTEXT ctx, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ ULONG64 cbOffset);
-        VOID(*pfnNotify)(_In_ DWORD fEvent, _In_opt_ PVOID pvEvent, _In_opt_ DWORD cbEvent);
-        VOID(*pfnClose)();
-        BOOL(*pfnVisibleModule)(_In_ PVMMDLL_PLUGIN_CONTEXT ctx);
+        BOOL(*pfnList)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _Inout_ PHANDLE pFileList);
+        NTSTATUS(*pfnRead)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead,  _In_ ULONG64 cbOffset);
+        NTSTATUS(*pfnWrite)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ ULONG64 cbOffset);
+        VOID(*pfnNotify)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_ DWORD fEvent, _In_opt_ PVOID pvEvent, _In_opt_ DWORD cbEvent);
+        VOID(*pfnClose)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP);
+        BOOL(*pfnVisibleModule)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP);
         PVOID pvReserved[10];
     } reg_fn;
     // Optional forensic plugin functionality for forensic (more comprehensive)
@@ -394,18 +429,19 @@ typedef struct tdVMMDLL_PLUGIN_REGINFO {
     // in single-threaded mode regards to the plugin itself - but 'ingest'
     // functions are called in-parallel multi-threaded between plugins.
     // Functions are called in the order of:
-    // pfnInitialize(), pfnIngest*(), pfnTimeline(), pfnFinalize()
+    // pfnInitialize(), pfnIngest*(), pfnTimeline(), pfnLogJSON(), pfnFinalize()
     struct {
-        PVOID(*pfnInitialize)();
+        PVOID(*pfnInitialize)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP);
         VOID(*pfnFinalize)(_In_opt_ PVOID ctxfc);
         VOID(*pfnTimeline)(
             _In_opt_ PVOID ctxfc,
             _In_ HANDLE hTimeline,
-            _In_ VOID(*pfnAddEntry)(_In_ HANDLE hTimeline, _In_ QWORD ft, _In_ DWORD dwAction, _In_ DWORD dwPID, _In_ QWORD qwValue, _In_ LPWSTR wszText),
+            _In_ VOID(*pfnAddEntry)(_In_ HANDLE hTimeline, _In_ QWORD ft, _In_ DWORD dwAction, _In_ DWORD dwPID, _In_ DWORD dwData32, _In_ QWORD qwData64, _In_ LPWSTR wszText),
             _In_ VOID(*pfnEntryAddBySql)(_In_ HANDLE hTimeline, _In_ DWORD cEntrySql, _In_ LPSTR *pszEntrySql));
         VOID(*pfnIngestPhysmem)(_In_opt_ PVOID ctxfc, _In_ PVMMDLL_PLUGIN_FORENSIC_INGEST_PHYSMEM pIngestPhysmem);
         VOID(*pfnIngestFinalize)(_In_opt_ PVOID ctxfc);
-        PVOID pvReserved[11];
+        PVOID pvReserved[10];
+        VOID(*pfnLogJSON)(_In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_ VOID(*pfnLogJSON)(_In_ PVMMDLL_PLUGIN_FORENSIC_JSONDATA pData));
     } reg_fnfc;
     // Additional system information - read/only by the plugins.
     struct {
@@ -416,6 +452,7 @@ typedef struct tdVMMDLL_PLUGIN_REGINFO {
         DWORD _Reserved[32];
     } sysinfo;
 } VMMDLL_PLUGIN_REGINFO, *PVMMDLL_PLUGIN_REGINFO;
+
 
 
 //-----------------------------------------------------------------------------
@@ -438,6 +475,7 @@ typedef struct tdVMMDLL_PLUGIN_REGINFO {
 #define VMMDLL_FLAG_NOPAGING_IO                     0x0020  // do not try to retrieve memory from paged out memory if read would incur additional I/O (even if possible).
 #define VMMDLL_FLAG_NOCACHEPUT                      0x0100  // do not write back to the data cache upon successful read from memory acquisition device.
 #define VMMDLL_FLAG_CACHE_RECENT_ONLY               0x0200  // only fetch from the most recent active cache region when reading.
+#define VMMDLL_FLAG_NO_PREDICTIVE_READ              0x0400  // do not perform additional predictive page reads (default on smaller requests).
 
 /*
 * Read memory in various non-contigious locations specified by the pointers to
@@ -550,7 +588,7 @@ BOOL VMMDLL_MemVirt2Phys(_In_ DWORD dwPID, _In_ ULONG64 qwVA, _Out_ PULONG64 pqw
 #define VMMDLL_MAP_NET_VERSION              2
 #define VMMDLL_MAP_PHYSMEM_VERSION          1
 #define VMMDLL_MAP_USER_VERSION             1
-#define VMMDLL_MAP_SERVICE_VERSION          1
+#define VMMDLL_MAP_SERVICE_VERSION          2
 
 // flags to check for existence in the fPage field of VMMDLL_MAP_PTEENTRY
 #define VMMDLL_MEMMAP_FLAG_PAGE_W          0x0000000000000002
@@ -793,6 +831,7 @@ typedef struct tdVMMDLL_MAP_SERVICEENTRY {
     LPWSTR wszPath;
     LPWSTR wszUserTp;
     LPWSTR wszUserAcct;
+    LPWSTR wszImagePath;
     DWORD dwPID;
     DWORD _FutureUse1;
     QWORD _FutureUse2;
@@ -1340,13 +1379,13 @@ BOOL VMMDLL_PdbLoad(_In_ DWORD dwPID, _In_ ULONG64 vaModuleBase, _Out_writes_(MA
 * NB! not all modules may exist - initially only module "nt" is available.
 * NB! if multiple modules have the same name the 1st to be added will be used.
 * -- szModule
-* -- cbSymbolOffset
+* -- cbSymbolAddressOrOffset = symbol virtual address or symbol offset.
 * -- szSymbolName = buffer to receive symbol name upon success.
 * -- pdwSymbolDisplacement = displacement from the beginning of the symbol.
 * -- return
 */
 _Success_(return)
-BOOL VMMDLL_PdbSymbolName(_In_ LPSTR szModule, _In_ DWORD cbSymbolOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement);
+BOOL VMMDLL_PdbSymbolName(_In_ LPSTR szModule, _In_ QWORD cbSymbolAddressOrOffset, _Out_writes_(MAX_PATH) LPSTR szSymbolName, _Out_opt_ PDWORD pdwSymbolDisplacement);
 
 /*
 * Retrieve a symbol virtual address given a module name and a symbol name.
@@ -1455,7 +1494,7 @@ BOOL VMMDLL_WinReg_HiveWrite(_In_ ULONG64 vaCMHive, _In_ DWORD ra, _In_ PBYTE pb
 *   3) '0x<vaCMHIVE>\ROOT\Key\SubKey'
 *   4) '0x<vaCMHIVE>\ORPHAN\Key\SubKey'          (orphan key)
 * -- wszFullPathKey
-* -- dwIndex
+* -- dwIndex = sub-key index 0..N (-1 for key).
 * -- lpName
 * -- lpcchName
 * -- lpftLastWriteTime

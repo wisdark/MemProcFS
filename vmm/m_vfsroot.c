@@ -3,7 +3,7 @@
 //               In practice this is the implementation of the root files:
 //               'memory.dmp' and 'memory.pmem' only.
 //
-// (c) Ulf Frisk, 2020
+// (c) Ulf Frisk, 2020-2021
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "pluginmanager.h"
@@ -11,37 +11,13 @@
 #include "sysquery.h"
 #include "version.h"
 #include "vmm.h"
+#include "vmmwindef.h"
 #include "vmmwininit.h"
+#include "vmmwinobj.h"      // DEBUG
 
 #define KDBG64_KiProcessorBlock     0x218
 #define KDBG64_ContextKPRCB         0x338
 #define KDBG64_OffsetPrcbNumber     0x2be
-
-#define _PHYSICAL_MEMORY_MAX_RUNS   0x20
-
-typedef struct {
-    QWORD BasePage;
-    QWORD PageCount;
-} _PHYSICAL_MEMORY_RUN64;
-
-typedef struct {
-    DWORD NumberOfRuns;
-    DWORD Reserved1;
-    DWORD NumberOfPages;
-    DWORD Reserved2;
-    _PHYSICAL_MEMORY_RUN64 Run[_PHYSICAL_MEMORY_MAX_RUNS];
-} _PHYSICAL_MEMORY_DESCRIPTOR64, *_PPHYSICAL_MEMORY_DESCRIPTOR64;
-
-typedef struct {
-    DWORD BasePage;
-    DWORD PageCount;
-} _PHYSICAL_MEMORY_RUN32;
-
-typedef struct {
-    DWORD NumberOfRuns;
-    DWORD NumberOfPages;
-    _PHYSICAL_MEMORY_RUN32 Run[_PHYSICAL_MEMORY_MAX_RUNS];
-} _PHYSICAL_MEMORY_DESCRIPTOR32, *_PPHYSICAL_MEMORY_DESCRIPTOR32;
 
 typedef struct tdVMMVFS_DUMP_CONTEXT_OVERLAY {
     QWORD pa;
@@ -186,8 +162,9 @@ VOID MVfsRoot_InitializeDumpContext_SetMemory(_In_ POB_VMMVFS_DUMP_CONTEXT ctx)
 VOID MVfsRoot_InitializeDumpContext64(_In_ PVMM_PROCESS pSystemProcess, _In_ POB_VMMVFS_DUMP_CONTEXT ctx)
 {
     PBYTE pb = ctx->Hdr.pb;
-    QWORD ftMin = 0, ftMax = 0;
-    SysQuery_TimeProcessMinMax(&ftMin, &ftMax);
+    QWORD ftMin, ftMax;
+    ftMin = ctxVmm->kernel.opt.ftBootTime;
+    ftMax = SysQuery_TimeCurrent();
     *(PDWORD)(pb + 0x000) = 0x45474150;                         // Signature #1
     *(PDWORD)(pb + 0x004) = 0x34365544;                         // Signature #2
     *(PDWORD)(pb + 0x008) = 0x0000000F;                         // DumpVersion
@@ -238,8 +215,9 @@ VOID MVfsRoot_InitializeDumpContext32(PVMM_PROCESS pSystemProcess, POB_VMMVFS_DU
 {
     PBYTE pb = ctx->Hdr.pb;
     //PDUMP_HEADER32 pd = &ctx->Hdr._32;
-    QWORD ftMin = 0, ftMax = 0;
-    SysQuery_TimeProcessMinMax(&ftMin, &ftMax);
+    QWORD ftMin, ftMax;
+    ftMin = ctxVmm->kernel.opt.ftBootTime;
+    ftMax = SysQuery_TimeCurrent();
     *(PDWORD)(pb + 0x000) = 0x45474150;                         // Signature #1
     *(PDWORD)(pb + 0x004) = 0x504d5544;                         // Signature #2
     *(PDWORD)(pb + 0x008) = 0x0000000F;                         // DumpVersion
@@ -464,11 +442,12 @@ NTSTATUS MVfsRoot_Write(_In_ PVMMDLL_PLUGIN_CONTEXT ctx, _In_reads_(cb) PBYTE pb
 */
 BOOL MVfsRoot_List(_In_ PVMMDLL_PLUGIN_CONTEXT ctx, _Inout_ PHANDLE pFileList)
 {
-    UNREFERENCED_PARAMETER(ctx);
-    VMMDLL_VfsList_AddDirectory(pFileList, L"name", NULL);
-    VMMDLL_VfsList_AddDirectory(pFileList, L"pid", NULL);
-    VMMDLL_VfsList_AddFile(pFileList, L"memory.pmem", ctxMain->dev.paMax, NULL);
-    VMMDLL_VfsList_AddFile(pFileList, L"memory.dmp", ctxMain->dev.paMax + (ctxVmm->f32 ? 0x1000 : 0x2000), NULL);
+    if(!ctx->wszPath[0]) {
+        VMMDLL_VfsList_AddDirectory(pFileList, L"name", NULL);
+        VMMDLL_VfsList_AddDirectory(pFileList, L"pid", NULL);
+        VMMDLL_VfsList_AddFile(pFileList, L"memory.pmem", ctxMain->dev.paMax, NULL);
+        VMMDLL_VfsList_AddFile(pFileList, L"memory.dmp", ctxMain->dev.paMax + (ctxVmm->f32 ? 0x1000 : 0x2000), NULL);
+    }
     return TRUE;
 }
 
