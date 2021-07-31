@@ -120,6 +120,15 @@
     <ClInclude Include="vmmevil.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="charutil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="oscompatibility.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="infodb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="vmmdll.c">
@@ -156,9 +165,6 @@
       <Filter>Source Files\modules</Filter>
     </ClCompile>
     <ClCompile Include="m_ldrmodules.c">
-      <Filter>Source Files\modules</Filter>
-    </ClCompile>
-    <ClCompile Include="m_status.c">
       <Filter>Source Files\modules</Filter>
     </ClCompile>
     <ClCompile Include="m_virt2phys.c">
@@ -317,6 +323,18 @@
     <ClCompile Include="m_fc_json.c">
       <Filter>Source Files\modules</Filter>
     </ClCompile>
+    <ClCompile Include="charutil.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="oscompatibility.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="m_conf.c">
+      <Filter>Source Files\modules</Filter>
+    </ClCompile>
+    <ClCompile Include="infodb.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="vmmdll.def">
@@ -324,6 +342,9 @@
     </None>
     <None Include="res\m_fc_json_elastic_import.ps1">
       <Filter>Resource Files\res</Filter>
+    </None>
+    <None Include="Makefile">
+      <Filter>Resource Files</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

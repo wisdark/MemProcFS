@@ -4,13 +4,14 @@
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
+#ifdef _WIN32
 #include <ws2tcpip.h>
+#endif /* _WIN32 */
 #include "vmmnet.h"
 #include "pe.h"
 #include "pdb.h"
+#include "infodb.h"
 #include "util.h"
-
-#define AF_INET6        23      // Ws2tcpip.h
 
 typedef struct _RTL_DYNAMIC_HASH_TABLE {
     DWORD Flags;                // +000
@@ -54,7 +55,6 @@ typedef struct tdVMMNET_OFFSET_TcpL_UdpA {
 
 typedef struct tdVMMNET_CONTEXT {
     QWORD vaModuleTcpip;
-    PDB_HANDLE hPDB;
     DWORD cPartition;
     QWORD vaPartitionTable;
     VMMNET_OFFSET_TcpE oTcpE;
@@ -702,7 +702,7 @@ fail:
 
 VOID VmmNet_CallbackCleanup_ObMapNet(PVMMOB_MAP_NET pOb)
 {
-    LocalFree(pOb->wszMultiText);
+    LocalFree(pOb->pbMultiText);
 }
 
 /*
@@ -810,28 +810,41 @@ VOID VmmNet_Initialize_Context(_In_ PVMM_PROCESS pSystemProcess)
 {
     BOOL fResult = FALSE;
     QWORD va;
+    PDB_HANDLE hPDB = 0;
     PVMMNET_CONTEXT ctx = NULL;
     PVMMOB_MAP_MODULE pObModuleMap = NULL;
     PVMM_MAP_MODULEENTRY peModuleTcpip;
     if(!(ctx = LocalAlloc(LMEM_ZEROINIT, sizeof(VMMNET_CONTEXT)))) { goto fail; }
-    // 1: fetch pdb handle
-    if(!VmmMap_GetModuleEntryEx(pSystemProcess, 0, L"tcpip.sys", &pObModuleMap, &peModuleTcpip)) { goto fail; }
+    // 1: fetch tcpip.sys info
+    if(!VmmMap_GetModuleEntryEx(pSystemProcess, 0, "tcpip.sys", &pObModuleMap, &peModuleTcpip)) { goto fail; }
     ctx->vaModuleTcpip = peModuleTcpip->vaBase;
-    if(!(ctx->hPDB = PDB_GetHandleFromModuleAddress(pSystemProcess, ctx->vaModuleTcpip))) { goto fail; }
-    if(!PDB_LoadEnsure(ctx->hPDB)) { goto fail; }
-    // 2: retrieve pdb information
-    PDB_GetSymbolPTR(ctx->hPDB, "PartitionTable", pSystemProcess, &ctx->vaPartitionTable);
-    PDB_GetSymbolDWORD(ctx->hPDB, "PartitionCount", pSystemProcess, &ctx->cPartition);
+    // 2: fetch optional pdb handle
+    if((hPDB = PDB_GetHandleFromModuleAddress(pSystemProcess, ctx->vaModuleTcpip))) {
+        PDB_LoadEnsure(hPDB);
+    }
+    // 4: retrieve pdb information
+    if(hPDB) {
+        PDB_GetSymbolPTR(hPDB, "PartitionTable", pSystemProcess, &ctx->vaPartitionTable);
+        PDB_GetSymbolDWORD(hPDB, "PartitionCount", pSystemProcess, &ctx->cPartition);
+    } else {
+        InfoDB_SymbolPTR("tcpip", ctx->vaModuleTcpip, "PartitionTable", pSystemProcess, &ctx->vaPartitionTable);
+        InfoDB_SymbolDWORD("tcpip", ctx->vaModuleTcpip, "PartitionCount", pSystemProcess, &ctx->cPartition);
+    }
     if(!VMM_KADDR(ctx->vaPartitionTable) || !ctx->cPartition || (ctx->cPartition > 64)) { goto fail; }
     // 3: retrieve TcpPortPool / UdpPortPool
     if(ctxVmm->kernel.dwVersionBuild <= 10586) {
-        PDB_GetSymbolPTR(ctx->hPDB, "TcpPortPool", pSystemProcess, &ctx->vaTcpPortPool);
-        PDB_GetSymbolPTR(ctx->hPDB, "UdpPortPool", pSystemProcess, &ctx->vaUdpPortPool);
+        if(hPDB) {
+            PDB_GetSymbolPTR(hPDB, "TcpPortPool", pSystemProcess, &ctx->vaTcpPortPool);
+            PDB_GetSymbolPTR(hPDB, "UdpPortPool", pSystemProcess, &ctx->vaUdpPortPool);
+        } else {
+            InfoDB_SymbolPTR("tcpip", ctx->vaModuleTcpip, "TcpPortPool", pSystemProcess, &ctx->vaTcpPortPool);
+            InfoDB_SymbolPTR("tcpip", ctx->vaModuleTcpip, "UdpPortPool", pSystemProcess, &ctx->vaUdpPortPool);
+        }
     } else {
-        if(PDB_GetSymbolPTR(ctx->hPDB, "TcpCompartmentSet", pSystemProcess, &va)) {
+        if(PDB_GetSymbolPTR(hPDB, "TcpCompartmentSet", pSystemProcess, &va) || InfoDB_SymbolPTR("tcpip", ctx->vaModuleTcpip, "TcpCompartmentSet", pSystemProcess, &va)) {
             ctx->vaTcpPortPool = VmmNet_Initialize_Context_PortPool(pSystemProcess, va, 'TcCo');
         }
-        if(PDB_GetSymbolPTR(ctx->hPDB, "UdpCompartmentSet", pSystemProcess, &va)) {
+        if(PDB_GetSymbolPTR(hPDB, "UdpCompartmentSet", pSystemProcess, &va) || InfoDB_SymbolPTR("tcpip", ctx->vaModuleTcpip, "UdpCompartmentSet", pSystemProcess, &va)) {
             ctx->vaUdpPortPool = VmmNet_Initialize_Context_PortPool(pSystemProcess, va, 'UdCo');
         }
     }
@@ -857,29 +870,31 @@ fail:
 PVMMOB_MAP_NET VmmNet_Initialize_DoWork(_In_ PVMM_PROCESS pSystemProcess)
 {
     PVMMNET_CONTEXT ctx = (PVMMNET_CONTEXT)ctxVmm->pNetContext;
-    LPCWSTR wszSTATES[] = {
-        L"CLOSED",
-        L"LISTENING",
-        L"SYN_SENT",
-        L"SYN_RCVD",
-        L"ESTABLISHED",
-        L"FIN_WAIT_1",
-        L"FIN_WAIT_2",
-        L"CLOSE_WAIT",
-        L"CLOSING",
-        L"LAST_ACK",
-        L"***",
-        L"***",
-        L"TIME_WAIT",
-        L"***"
+    LPCSTR szSTATES[] = {
+        "CLOSED",
+        "LISTENING",
+        "SYN_SENT",
+        "SYN_RCVD",
+        "ESTABLISHED",
+        "FIN_WAIT_1",
+        "FIN_WAIT_2",
+        "CLOSE_WAIT",
+        "CLOSING",
+        "LAST_ACK",
+        "***",
+        "***",
+        "TIME_WAIT",
+        "***"
     };
-    DWORD i, cNetEntries, cchMultiText;
+    DWORD i, cNetEntries;
     PVMMOB_MAP_NET pObNet = NULL;
     PVMM_MAP_NETENTRY pe, pNetEntry;
     DWORD dwIpVersion, cwszSrc, cwszDst;
-    WCHAR wszSrc[64], wszDst[64];
+    CHAR uszSrc[64], uszDst[64];
+    CHAR uszBuffer[MAX_PATH];
     POB_MAP pmObNetEntries = NULL;
     VMMNET_ASYNC_CONTEXT actx;
+    POB_STRMAP psmOb = NULL;
     // 1: fetch / initialize context
     if(ctxVmm->f32) { goto fail; }
     if(!ctx) {
@@ -893,53 +908,51 @@ PVMMOB_MAP_NET VmmNet_Initialize_DoWork(_In_ PVMM_PROCESS pSystemProcess)
     actx.pSystemProcess = pSystemProcess;
     VmmWorkWaitMultiple(&actx, 2, VmmNet_TcpE_DoWork, VmmNet_InPP_DoWork);
     cNetEntries = ObMap_Size(pmObNetEntries);
-    if(!(pObNet = Ob_Alloc(OB_TAG_MAP_NET, LMEM_ZEROINIT, sizeof(VMMOB_MAP_NET) + cNetEntries * sizeof(VMM_MAP_NETENTRY), VmmNet_CallbackCleanup_ObMapNet, NULL))) { goto fail; }
-    if(!(pObNet->wszMultiText = LocalAlloc(LMEM_ZEROINIT, 0x01000000))) { goto fail; }
-    memcpy(pObNet->wszMultiText, L"\0***\0", 10);
-    cchMultiText = 5;
+    if(!(psmOb = ObStrMap_New(OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY))) { goto fail; }
+    if(!(pObNet = Ob_Alloc(OB_TAG_MAP_NET, LMEM_ZEROINIT, sizeof(VMMOB_MAP_NET) + cNetEntries * sizeof(VMM_MAP_NETENTRY), (OB_CLEANUP_CB)VmmNet_CallbackCleanup_ObMapNet, NULL))) { goto fail; }
     for(i = 0; i < cNetEntries; i++) {
         pe = pObNet->pMap + i;
         pNetEntry = ObMap_GetByIndex(pmObNetEntries, i);
         memcpy(pe, pNetEntry, sizeof(VMM_MAP_NETENTRY));
         // src
-        if(pe->Src.fValid && (pe->Src.wszText = (LPWSTR)InetNtopW(pe->AF, pe->Src.pbAddr, pObNet->wszMultiText + cchMultiText, 64))) {
-            cchMultiText += (DWORD)wcslen(pObNet->wszMultiText + cchMultiText) + 1;
+        if(pe->Src.fValid && InetNtopA(pe->AF, pe->Src.pbAddr, uszBuffer, sizeof(uszBuffer))) {
+            ObStrMap_PushPtrUU(psmOb, uszBuffer, &pe->Src.uszText, NULL);
+        } else {
+            ObStrMap_PushPtrUU(psmOb, "***", &pe->Src.uszText, NULL);
         }
-        if(!pe->Src.wszText) { pe->Src.wszText = pObNet->wszMultiText + 1; }
         // dst
-        if(pe->Dst.fValid && (pe->Dst.wszText = (LPWSTR)InetNtopW(pe->AF, pe->Dst.pbAddr, pObNet->wszMultiText + cchMultiText, 64))) {
-            cchMultiText += (DWORD)wcslen(pObNet->wszMultiText + cchMultiText) + 1;
+        if(pe->Dst.fValid && InetNtopA(pe->AF, pe->Dst.pbAddr, uszBuffer, sizeof(uszBuffer))) {
+            ObStrMap_PushPtrUU(psmOb, uszBuffer, &pe->Dst.uszText, NULL);
+        } else {
+            ObStrMap_PushPtrUU(psmOb, "***", &pe->Dst.uszText, NULL);
         }
-        if(!pe->Dst.wszText) { pe->Dst.wszText = pObNet->wszMultiText + 1; }
         // wsz
         dwIpVersion = (pe->AF == AF_INET) ? 4 : ((pe->AF == AF_INET6) ? 6 : 0);
-        cwszSrc = _snwprintf_s(wszSrc, _countof(wszSrc), _TRUNCATE, ((dwIpVersion == 6) ? L"[%s]:%i" : L"%s:%i"), pe->Src.wszText, pe->Src.port);
+        cwszSrc = _snprintf_s(uszSrc, _countof(uszSrc), _TRUNCATE, ((dwIpVersion == 6) ? "[%s]:%i" : "%s:%i"), pe->Src.uszText, pe->Src.port);
         cwszDst = pe->Dst.fValid ?
-            _snwprintf_s(wszDst, _countof(wszDst), _TRUNCATE, ((dwIpVersion == 6) ? L"[%s]:%i" : L"%s:%i"), pe->Dst.wszText, pe->Dst.port) :
-            _snwprintf_s(wszDst, _countof(wszDst), _TRUNCATE, L"***");
-        pe->wszText = pObNet->wszMultiText + cchMultiText;
-        pe->cwszText = _snwprintf_s(
-            pe->wszText,
-            0x100,
-            0x100,
-            L"%sv%i  %-11s  %-*s  %-*s",
-            ((pe->dwPoolTag == 'UdpA') ? L"UDP" : L"TCP"),
+            _snprintf_s(uszDst, _countof(uszDst), _TRUNCATE, ((dwIpVersion == 6) ? "[%s]:%i" : "%s:%i"), pe->Dst.uszText, pe->Dst.port) :
+            _snprintf_s(uszDst, _countof(uszDst), _TRUNCATE, "***");
+        _snprintf_s(
+            uszBuffer,
+            sizeof(uszBuffer),
+            _TRUNCATE,
+            "%sv%i  %-11s  %-*s  %-*s",
+            ((pe->dwPoolTag == 'UdpA') ? "UDP" : "TCP"),
             dwIpVersion,
-            wszSTATES[pe->dwState],
+            szSTATES[pe->dwState],
             max(28, cwszSrc),
-            wszSrc,
+            uszSrc,
             max(28, cwszDst),
-            wszDst
+            uszDst
         );
-        cchMultiText += pe->cwszText + 1;
+        ObStrMap_PushPtrUU(psmOb, uszBuffer, &pe->uszText, &pe->cbuText);
         pObNet->cMap++;
-        if(cchMultiText > 0x00800000 - 0x1000) { break; }
     }
+    ObStrMap_FinalizeAllocU_DECREF_NULL(&psmOb, &pObNet->pbMultiText, &pObNet->cbMultiText);
     qsort(pObNet->pMap, pObNet->cMap, sizeof(VMM_MAP_NETENTRY), (int(*)(void const*, void const*))VmmNet_TcpE_CmpSort);
-    pObNet->cbMultiText = cchMultiText * sizeof(WCHAR);
-    if(pObNet->wszMultiText != LocalReAlloc(pObNet->wszMultiText, pObNet->cbMultiText, 0)) { goto fail; }
     Ob_INCREF(pObNet);
 fail:
+    Ob_DECREF(psmOb);
     Ob_DECREF(pmObNetEntries);
     return Ob_DECREF(pObNet);
 }
@@ -965,9 +978,6 @@ PVMMOB_MAP_NET VmmNet_Initialize()
     }
     if(!pObNet) {
         pObNet = Ob_Alloc(OB_TAG_MAP_NET, LMEM_ZEROINIT, sizeof(VMMOB_MAP_NET), NULL, NULL);
-        if(pObNet) {
-            pObNet->wszMultiText = (LPWSTR)&pObNet->cbMultiText;   // NULL CHAR guaranteed.
-        }
     }
     ObContainer_SetOb(ctxVmm->pObCMapNet, pObNet);
     LeaveCriticalSection(&ctxVmm->LockUpdateMap);

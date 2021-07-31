@@ -5,9 +5,8 @@
 //
 #ifndef __OB_H__
 #define __OB_H__
-#include <windows.h>
+#include "../oscompatibility.h"
 
-typedef unsigned __int64                QWORD, *PQWORD;
 #define OB_DEBUG
 #define OB_HEADER_MAGIC                 0x0c0efefe
 
@@ -19,6 +18,8 @@ typedef unsigned __int64                QWORD, *PQWORD;
 #define OB_TAG_CORE_MEMFILE             'ObMF'
 #define OB_TAG_CORE_CACHEMAP            'ObMc'
 #define OB_TAG_CORE_STRMAP              'ObMs'
+#define OB_TAG_CORE_STRWMAP             'ObMw'
+#define OB_TAG_INFODB_CTX               'IDBC'
 #define OB_TAG_MAP_PTE                  'Mpte'
 #define OB_TAG_MAP_VAD                  'Mvad'
 #define OB_TAG_MAP_VADEX                'Mvae'
@@ -86,6 +87,8 @@ typedef struct tdOB {
     DWORD cbData;
 } OB, *POB;
 
+typedef VOID(*OB_CLEANUP_CB)(_In_ PVOID pOb);
+
 /*
 * Allocate a new object manager memory object.
 * -- tag = tag identifying the type of object.
@@ -97,14 +100,15 @@ typedef struct tdOB {
 * -- pfnRef_1 = optional callback for when object reach refcount = 1 at DECREF.
 * -- return = allocated object on success, with refcount = 1, - NULL on fail.
 */
-PVOID Ob_Alloc(_In_ DWORD tag, _In_ UINT uFlags, _In_ SIZE_T uBytes, _In_opt_ VOID(*pfnRef_0)(_In_ PVOID pOb), _In_opt_ VOID(*pfnRef_1)(_In_ PVOID pOb));
+PVOID Ob_Alloc(_In_ DWORD tag, _In_ UINT uFlags, _In_ SIZE_T uBytes, _In_opt_ OB_CLEANUP_CB pfnRef_0, _In_opt_ OB_CLEANUP_CB pfnRef_1);
 
 /*
 * Increase the reference count of a object by one.
 * -- pOb
 * -- return
 */
-PVOID Ob_INCREF(_In_opt_ PVOID pOb);
+PVOID Ob_XINCREF(_In_opt_ PVOID pOb);
+#define Ob_INCREF(pOb)          (Ob_XINCREF((PVOID)pOb))
 
 /*
 * Decrease the reference count of an object manager object by one.
@@ -113,7 +117,8 @@ PVOID Ob_INCREF(_In_opt_ PVOID pOb);
 * -- pOb
 * -- return = pObIn if pObIn is valid and refcount > 0 after decref.
 */
-PVOID Ob_DECREF(_In_opt_ PVOID pOb);
+PVOID Ob_XDECREF(_In_opt_ PVOID pOb);
+#define Ob_DECREF(pOb)          (Ob_XDECREF((PVOID)pOb))
 
 /*
 * Decrease the reference count of a object manager object. If the reference
@@ -121,13 +126,8 @@ PVOID Ob_DECREF(_In_opt_ PVOID pOb);
 * Also set the incoming pointer to NULL.
 * -- ppOb
 */
-inline VOID Ob_DECREF_NULL(_In_opt_ PVOID *ppOb)
-{
-    if(ppOb) {
-        Ob_DECREF(*ppOb);
-        *ppOb = NULL;
-    }
-}
+VOID Ob_XDECREF_NULL(_In_opt_ PVOID *ppOb);
+#define Ob_DECREF_NULL(pOb)     (Ob_XDECREF_NULL((PVOID*)pOb))
 
 /*
 * Checks if pObIn is a valid object manager object with the specified tag.
@@ -147,10 +147,10 @@ BOOL Ob_VALID_TAG(_In_ PVOID pObIn, _In_ DWORD tag);
 typedef struct tdOB_DATA {
     OB ObHdr;
     union {
-        BYTE pb[];
-        CHAR sz[];
-        DWORD pdw[];
-        QWORD pqw[];
+        BYTE pb[0];
+        CHAR sz[0];
+        DWORD pdw[0];
+        QWORD pqw[0];
     };
 } OB_DATA, *POB_DATA;
 
@@ -313,25 +313,6 @@ BOOL ObSet_Remove(_In_opt_ POB_SET pvs, _In_ QWORD value);
 * -- pvs
 */
 VOID ObSet_Clear(_In_opt_ POB_SET pvs);
-
-/*
-* Save the contents of an ObSet to a disk file.
-* The resulting disk file may be read with ObSet_FileLoad().
-* -- pvs
-* -- wszFileName = save file to create.
-* -- return
-*/
-_Success_(return)
-BOOL ObSet_FileSave(_In_opt_ POB_SET pvs, _In_ LPWSTR wszFileName);
-
-/*
-* Load the contents of an ObSet disk file into the supplied set.
-* -- pvs
-* -- wszFileName = file previously saved by ObSet_FileSave().
-* -- return
-*/
-_Success_(return)
-BOOL ObSet_FileLoad(_In_opt_ POB_SET pvs, _In_ LPWSTR wszFileName);
 
 /*
 * Remove the "last" value in a way that is safe for concurrent iterations of
@@ -712,13 +693,13 @@ PVOID ObCacheMap_RemoveByKey(_In_opt_ POB_CACHEMAP pcm, _In_ QWORD qwKey);
 
 // ----------------------------------------------------------------------------
 // STRMAP FUNCTIONALITY BELOW:
-//
-// The strmap is created and populated with strings (ascii and wide-char)
+// 
+// The strmap is created and populated with strings (utf-8, ascii and wide-char)
 // in an optimal way removing duplicates. Upon finalization the string map
 // results in a multi-string and an update of string references will happen.
 //
 // References to the strings will only be valid after a successful call to
-// finalize_DECREF_NULL().
+// FinalizeAlloc_DECREF_NULL() or FinalizeBuffer()
 //
 // The strmap is only meant to be an interim object to be used for creation
 // of multi-string values and should not be kept as a long-lived object.
@@ -727,63 +708,116 @@ PVOID ObCacheMap_RemoveByKey(_In_opt_ POB_CACHEMAP pcm, _In_ QWORD qwKey);
 // ----------------------------------------------------------------------------
 
 typedef struct tdOB_STRMAP *POB_STRMAP;
+typedef struct tdOB_STRWMAP *POB_STRWMAP;
 
 // Strings in OB_STRMAP are considered to be CASE SENSITIVE.
-#define OB_STRMAP_FLAGS_CASE_SENSITIVE          0x00
+#define OB_STRMAP_FLAGS_CASE_SENSITIVE         0x00
 
 // Strings in OB_STRMAP are considered to be CASE INSENSITIVE. The case is
 // preserved for 1st unique entry added; subsequent entries will use 1st entry.
-#define OB_STRMAP_FLAGS_CASE_INSENSITIVE        0x01
+#define OB_STRMAP_FLAGS_CASE_INSENSITIVE       0x01
 
 // Assign temporary string values to destinations at time of push.
 // NB! values will become invalid after OB_STRMAP DECREF/FINALIZE!
-#define OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY    0x02
+#define OB_STRMAP_FLAGS_STR_ASSIGN_TEMPORARY   0x02
+
+//
+// STRMAP BELOW:
+//
 
 /*
-* Create a new strmap. A strmap (ObStrMap) provides an easy way to add new
-* strings to a multi-string in an efficient way. The ObStrMap is not meant
-* to be a long-term object - it's supposed to be finalized and decommissioned
-* by calling ObStrMap_Finalize_DECREF_NULL().
-* The ObStrMap is an object manager object and must be DECREF'ed when required.
-* CALLER DECREF: return
-* -- flags = defined by OB_STRMAP_FLAGS_*
-* -- return
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- usz
+* -- return = TRUE on insertion, FALSE otherwise.
 */
-POB_STRMAP ObStrMap_New(_In_ QWORD flags);
+_Success_(return)
+BOOL ObStrMap_PushU(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR usz);
 
 /*
 * Push / Insert into the ObStrMap.
 * -- psm
 * -- sz
-* -- pwszDst
-* -- pcchDst
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_PushA(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
+BOOL ObStrMap_PushA(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz);
+
+/*
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- wsz
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushW(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz);
+
+/*
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- usz
+* -- puszDst
+* -- pcbuDst
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushPtrUU(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR usz, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst);
+
+/*
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- sz
+* -- puszDst
+* -- pcbuDst
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushPtrAU(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR sz, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst);
+
+/*
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- wsz
+* -- puszDst
+* -- pcbuDst
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushPtrWU(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst);
+
+/*
+* Push / Insert into the ObStrMap.
+* -- psm
+* -- usz
+* -- pwszDst
+* -- pcbwDst
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushPtrUW(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR usz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcbwDst);
 
 /*
 * Push / Insert into the ObStrMap.
 * -- psm
 * -- wsz
 * -- pwszDst
-* -- pcchDst
+* -- pcbwDst
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_Push(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
+BOOL ObStrMap_PushPtrWW(_In_opt_ POB_STRMAP psm, _In_opt_ LPWSTR wsz, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcbwDst);
 
 /*
-* Push / Insert max 2048 characters into ObStrMap using a swprintf_s syntax.
+* Push / Insert into the ObStrMap. Result pointer is dependant on fWideChar flag.
 * -- psm
-* -- pwszDst
-* -- pcchDst
-* -- wszFormat
-* -- ...
+* -- usz
+* -- puszDst = ptr to utf-8 _OR_ wide string depending on fWideChar
+* -- pcbuDst = # bytes required to hold *puszDst
+* -- fWideChar
 * -- return = TRUE on insertion, FALSE otherwise.
 */
 _Success_(return)
-BOOL ObStrMap_Push_swprintf_s(_In_opt_ POB_STRMAP psm, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst, _In_z_ _Printf_format_string_ wchar_t const *const wszFormat, ...);
+BOOL ObStrMap_PushPtrUXUW(_In_opt_ POB_STRMAP psm, _In_opt_ LPSTR usz, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst, BOOL fWideChar);
 
 /*
 * Push a UNICODE_OBJECT Pointer for delayed resolve at finalize stage.
@@ -791,12 +825,12 @@ BOOL ObStrMap_Push_swprintf_s(_In_opt_ POB_STRMAP psm, _Out_opt_ LPWSTR *pwszDst
 * -- psm
 * -- f32 = 32-bit/64-bit unicode object.
 * -- vaUnicodeObject
-* -- pwszDst
-* -- pcchDst
-* -- return = TRUE on initial validation success (NB! no guarantee for success).
+* -- puszDst
+* -- pcbuDst
+* -- return = TRUE on validation success (NB! no guarantee for final success).
 */
 _Success_(return)
-BOOL ObStrMap_Push_UnicodeObject(_In_opt_ POB_STRMAP psm, _In_ BOOL f32, _In_ QWORD vaUnicodeObject, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
+BOOL ObStrMap_Push_UnicodeObject(_In_opt_ POB_STRMAP psm, _In_ BOOL f32, _In_ QWORD vaUnicodeObject, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst);
 
 /*
 * Push a UNICODE_OBJECT Buffer for delayed resolve at finalize stage.
@@ -804,12 +838,25 @@ BOOL ObStrMap_Push_UnicodeObject(_In_opt_ POB_STRMAP psm, _In_ BOOL f32, _In_ QW
 * -- psm
 * -- cbUnicodeBuffer.
 * -- vaUnicodeBuffer
-* -- pwszDst
-* -- pcchDst
-* -- return = TRUE on initial validation success (NB! no guarantee for success).
+* -- puszDst
+* -- pcbuDst
+* -- return = TRUE on validation success (NB! no guarantee for final success).
 */
 _Success_(return)
-BOOL ObStrMap_Push_UnicodeBuffer(_In_opt_ POB_STRMAP psm, _In_ WORD cbUnicodeBuffer, _In_ QWORD vaUnicodeBuffer, _Out_opt_ LPWSTR *pwszDst, _Out_opt_ PDWORD pcchDst);
+BOOL ObStrMap_Push_UnicodeBuffer(_In_opt_ POB_STRMAP psm, _In_ WORD cbUnicodeBuffer, _In_ QWORD vaUnicodeBuffer, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst);
+
+/*
+* Push / Insert max 2048 char-bytes into ObStrMap using a snprintf_s syntax.
+* All szFormat and all string-arguments are assumed to be utf-8 encoded.
+* -- psm
+* -- puszDst
+* -- pcbuDst
+* -- uszFormat
+* -- ...
+* -- return = TRUE on insertion, FALSE otherwise.
+*/
+_Success_(return)
+BOOL ObStrMap_PushUU_snprintf_s(_In_opt_ POB_STRMAP psm, _Out_opt_ LPSTR *puszDst, _Out_opt_ PDWORD pcbuDst, _In_z_ _Printf_format_string_ char const *const uszFormat, ...);
 
 /*
 * Finalize the ObStrMap. Create and assign the MultiStr and assign each
@@ -818,14 +865,81 @@ BOOL ObStrMap_Push_UnicodeBuffer(_In_opt_ POB_STRMAP psm, _In_ WORD cbUnicodeBuf
 * Also decrease the reference count of the object. If the reference count
 * reaches zero the object will be cleaned up.
 * Also set the incoming pointer to NULL.
-* CALLER LOCALFREE: *pwszMultiStr
-* -- ppsm
-* -- pwszMultiStr
+* CALLER LOCALFREE: *ppbMultiStr
+* -- ppObStrMap
+* -- ppbMultiStr
 * -- pcbMultiStr
 * -- return
 */
 _Success_(return)
-BOOL ObStrMap_Finalize_DECREF_NULL(_In_opt_ PVOID *ppsm, _Out_ LPWSTR *pwszMultiStr, _Out_ PDWORD pcbMultiStr);
+BOOL ObStrMap_FinalizeAllocU_DECREF_NULL(_In_opt_ POB_STRMAP *ppObStrMap, _Out_ PBYTE *ppbMultiStr, _Out_ PDWORD pcbMultiStr);
+
+/*
+* Finalize the ObStrMap. Create and assign the MultiStr and assign each
+* previously added string reference to a pointer location within the MultiStr.
+* ---
+* Also decrease the reference count of the object. If the reference count
+* reaches zero the object will be cleaned up.
+* Also set the incoming pointer to NULL.
+* CALLER LOCALFREE: *ppbMultiStr
+* -- ppObStrMap
+* -- ppbMultiStr
+* -- pcbMultiStr
+* -- return
+*/
+_Success_(return)
+BOOL ObStrMap_FinalizeAllocW_DECREF_NULL(_In_opt_ POB_STRMAP *ppObStrMap, _Out_ PBYTE *ppbMultiStr, _Out_ PDWORD pcbMultiStr);
+
+/*
+* Finalize the ObStrMap. Write the MultiStr into the supplied buffer and assign
+* previously added string reference to a pointer location within the MultiStr.
+* -- psm
+* -- cbuMultiStr
+* -- pbMultiStr = NULL for size query
+* -- pcbMultiStr
+* -- return
+*/
+_Success_(return)
+BOOL ObStrMap_FinalizeBufferU(_In_opt_ POB_STRMAP psm, _In_ DWORD cbMultiStr, _Out_writes_bytes_opt_(cbMultiStr) PBYTE pbMultiStr, _Out_ PDWORD pcbMultiStr);
+
+/*
+* Finalize the ObStrMap. Write the MultiStr into the supplied buffer and assign
+* previously added string reference to a pointer location within the MultiStr.
+* -- psm
+* -- cbMultiStr
+* -- pbMultiStr = NULL for size query
+* -- pcbMultiStr
+* -- return
+*/
+_Success_(return)
+BOOL ObStrMap_FinalizeBufferW(_In_opt_ POB_STRMAP psm, _In_ DWORD cbMultiStr, _Out_writes_bytes_opt_(cbMultiStr) PBYTE pbMultiStr, _Out_ PDWORD pcbMultiStr);
+
+/*
+* Finalize the ObStrMap as either UTF-8 or Wide. Write the MultiStr into the
+* supplied buffer and assign previously added string reference to a pointer
+* location within the MultiStr.
+* -- psm
+* -- cbMultiStr
+* -- pbMultiStr = NULL for size query
+* -- pcbMultiStr
+* -- fWideChar
+* -- return
+*/
+_Success_(return)
+BOOL ObStrMap_FinalizeBufferXUW(_In_opt_ POB_STRMAP psm, _In_ DWORD cbMultiStr, _Out_writes_bytes_opt_(cbMultiStr) PBYTE pbMultiStr, _Out_ PDWORD pcbMultiStr, _In_ BOOL fWideChar);
+
+/*
+* Create a new strmap. A strmap (ObStrMap) provides an easy way to add new
+* strings to a multi-string in an efficient way. The ObStrMap is not meant
+* to be a long-term object - it's supposed to be finalized and possibly
+* decommissioned by calling any of the ObStrMap_Finalize*() functions.
+* The ObStrMap is an object manager object and must be DECREF'ed when required.
+* CALLER DECREF: return
+* -- flags
+* -- return
+*/
+_Success_(return != NULL)
+POB_STRMAP ObStrMap_New(_In_ QWORD flags);
 
 
 
