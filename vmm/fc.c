@@ -29,6 +29,16 @@ static LPSTR FC_SQL_SCHEMA_STR =
     "DROP TABLE IF EXISTS str; " \
     "CREATE TABLE str ( id INTEGER PRIMARY KEY, cbu INT, cbj INT, sz TEXT ); ";
 
+
+
+// ----------------------------------------------------------------------------
+// FC global variable below:
+// ----------------------------------------------------------------------------
+
+PFC_CONTEXT ctxFc = NULL;
+
+
+
 // ----------------------------------------------------------------------------
 // SQLITE GENERAL FUNCTIONALITY:
 // ----------------------------------------------------------------------------
@@ -870,7 +880,9 @@ _Success_(return)
 BOOL FcInitialize_Impl(_In_ DWORD dwDatabaseType, _In_ BOOL fForceReInit)
 {
     DWORD i;
-    if(ctxMain->dev.fVolatile) { return FALSE; }
+    if(ctxMain->dev.fVolatile) {
+        vmmprintf("WARNING: FORENSIC mode on volatile memory is not recommended due to memory drift/smear.\n");
+    }
     if(!dwDatabaseType || (dwDatabaseType > FC_DATABASE_TYPE_MAX)) { return FALSE; }
     if(ctxFc && !fForceReInit) { return FALSE; }
     PDB_Initialize_WaitComplete();
