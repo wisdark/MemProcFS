@@ -75,19 +75,19 @@ VOID VmmWinInit_TryInitializeKernelOptionalValues()
     // Optional EPROCESS and _TOKEN offsets
     if(!ctxVmm->offset.EPROCESS.opt.Token) {
         // EPROCESS / KPROCESS
-        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "Token", &dwo) && (dwo < sizeof(((PVMM_PROCESS)0)->win.EPROCESS.cb) - 8)) {
+        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "Token", &dwo) && (dwo < pObSystemProcess->win.EPROCESS.cb - 8)) {
             ctxVmm->offset.EPROCESS.opt.Token = (WORD)dwo;
         }
-        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "CreateTime", &dwo) && (dwo < sizeof(((PVMM_PROCESS)0)->win.EPROCESS.cb) - 8)) {
+        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "CreateTime", &dwo) && (dwo < pObSystemProcess->win.EPROCESS.cb - 8)) {
             ctxVmm->offset.EPROCESS.opt.CreateTime = (WORD)dwo;
         }
-        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "ExitTime", &dwo) && (dwo < sizeof(((PVMM_PROCESS)0)->win.EPROCESS.cb) - 8)) {
+        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_EPROCESS", "ExitTime", &dwo) && (dwo < pObSystemProcess->win.EPROCESS.cb - 8)) {
             ctxVmm->offset.EPROCESS.opt.ExitTime = (WORD)dwo;
         }
-        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_KPROCESS", "KernelTime", &dwo) && (dwo < sizeof(((PVMM_PROCESS)0)->win.EPROCESS.cb) - 8)) {
+        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_KPROCESS", "KernelTime", &dwo) && (dwo < pObSystemProcess->win.EPROCESS.cb - 8)) {
             ctxVmm->offset.EPROCESS.opt.KernelTime = (WORD)dwo;
         }
-        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_KPROCESS", "UserTime", &dwo) && (dwo < sizeof(((PVMM_PROCESS)0)->win.EPROCESS.cb) - 8)) {
+        if(PDB_GetTypeChildOffset(PDB_HANDLE_KERNEL, "_KPROCESS", "UserTime", &dwo) && (dwo < pObSystemProcess->win.EPROCESS.cb - 8)) {
             ctxVmm->offset.EPROCESS.opt.UserTime = (WORD)dwo;
         }
         // TOKEN
@@ -209,7 +209,7 @@ VOID VmmWinInit_TryInitializeKernelOptionalValues()
 */
 VOID VmmWinInit_FindNtosScan64_SmallPageWalk_DoWork(_In_ QWORD paTable, _In_ QWORD vaBase, _In_ QWORD vaMin, _In_ QWORD vaMax, _In_ BYTE iPML, _In_ POB_SET psvaKernelCandidates)
 {
-    const QWORD PML_REGION_SIZE[5] = { 0, 12, 21, 30, 39 };
+    static const QWORD PML_REGION_SIZE[5] = { 0, 12, 21, 30, 39 };
     QWORD i, j, pte, vaCurrent;
     PVMMOB_CACHE_MEM pObPTEs = NULL;
     BOOL f;
@@ -358,7 +358,7 @@ QWORD VmmWinInit_FindNtosScan64(PVMM_PROCESS pSystemProcess)
         if(cbSize >= 0x01800000) { continue; }  // too big
         if(cbSize <= 0x00400000) { continue; }  // too small
         // try locate ntoskrnl.exe base inside suggested area
-        if(!(pb = (PBYTE)LocalAlloc(0, cbSize))) { return 0; }
+        if(!(pb = (PBYTE)LocalAlloc(0, (DWORD)cbSize))) { return 0; }
         VmmReadEx(pSystemProcess, vaBase, pb, (DWORD)cbSize, NULL, 0);
         for(p = 0; p < cbSize; p += 0x1000) {
             // check for (1) MZ header, (2) POOLCODE section, (3) ntoskrnl.exe module name
@@ -392,7 +392,7 @@ QWORD VmmWinInit_FindNtosScanHint64(_In_ PVMM_PROCESS pSystemProcess, _In_ QWORD
     DWORD cbRead;
     CHAR szModuleName[MAX_PATH] = { 0 };
     PIMAGE_DOS_HEADER pDosHeader;
-    PIMAGE_NT_HEADERS pNtHeader;
+    PIMAGE_NT_HEADERS64 pNtHeader;
     pb = LocalAlloc(0, 0x00200000);
     if(!pb) { goto cleanup; }
     // Scan back in 2MB chunks a time, (ntoskrnl.exe is loaded in 2MB pages except in low memory situations).
@@ -408,7 +408,7 @@ QWORD VmmWinInit_FindNtosScanHint64(_In_ PVMM_PROCESS pSystemProcess, _In_ QWORD
             pDosHeader = (PIMAGE_DOS_HEADER)(pb + p);                       // DOS header
             if(pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) { continue; }    // DOS header signature (MZ)
             if(pDosHeader->e_lfanew > 0x800) { continue; }
-            pNtHeader = (PIMAGE_NT_HEADERS)(pb + p + pDosHeader->e_lfanew); // NT header
+            pNtHeader = (PIMAGE_NT_HEADERS64)(pb + p + pDosHeader->e_lfanew); // NT header
             if(pNtHeader->Signature != IMAGE_NT_SIGNATURE) { continue; }    // NT header signature
             for(o = 0; o < 0x1000; o += 8) {
                 if(*(PQWORD)(pb + p + o) == 0x45444F434C4F4F50) {           // POOLCODE
@@ -431,9 +431,9 @@ cleanup:
 }
 
 /*
-* scans the relatively limited memory space 0x80000000-0x83ffffff for the base
+* scans the relatively limited memory space 0x80000000-0x847fffff for the base
 * of 'ntoskrnl.exe'. NB! this is a very non-optimized way of doing things and
-* should be improved upon to increase startup performance - but 64MB is not a
+* should be improved upon to increase startup performance - but 72MB is not a
 * huge amount of memory and it's only scanned at startup ...
 * -- pSystemProcess
 * -- return = virtual address of ntoskrnl.exe base if successful, otherwise 0.
@@ -445,8 +445,8 @@ DWORD VmmWinInit_FindNtosScan32(_In_ PVMM_PROCESS pSystemProcess)
     CHAR szModuleName[MAX_PATH] = { 0 };
     PIMAGE_DOS_HEADER pDosHeader;
     PIMAGE_NT_HEADERS pNtHeader;
-    if(!(pb = LocalAlloc(LMEM_ZEROINIT, 0x04000000))) { return 0; }
-    for(p = 0; p < 0x04000000; p += 0x1000) {
+    if(!(pb = LocalAlloc(LMEM_ZEROINIT, 0x04800000))) { return 0; }
+    for(p = 0; p < 0x04800000; p += 0x1000) {
         // read 8MB chunks when required.
         if(0 == p % 0x00800000) {
             VmmReadEx(pSystemProcess, 0x80000000ULL + p, pb + p, 0x00800000, NULL, 0);
@@ -800,6 +800,26 @@ VOID VmmWinInit_VersionNumber(_In_ PVMM_PROCESS pProcessSMSS)
             ctxVmm->kernel.dwVersionMinor = *(PDWORD)(pbPEB + 0x11c);
             ctxVmm->kernel.dwVersionBuild = *(PWORD)(pbPEB + 0x120);
         }
+    } else if(PDB_GetSymbolDWORD(PDB_HANDLE_KERNEL, "NtBuildNumber", PVMM_PROCESS_SYSTEM, &ctxVmm->kernel.dwVersionBuild)) {
+        ctxVmm->kernel.dwVersionBuild = (WORD)ctxVmm->kernel.dwVersionBuild;
+        if(ctxVmm->kernel.dwVersionBuild) {
+            if(ctxVmm->kernel.dwVersionBuild >= 10240) {        // 10 (incl. win11)
+                ctxVmm->kernel.dwVersionMajor = 10;
+                ctxVmm->kernel.dwVersionMinor = 0;
+            } else if(ctxVmm->kernel.dwVersionBuild >= 9100) {  // 8
+                ctxVmm->kernel.dwVersionMajor = 6;
+                ctxVmm->kernel.dwVersionMinor = 3;
+            } else if(ctxVmm->kernel.dwVersionBuild >= 7600) {  // 7
+                ctxVmm->kernel.dwVersionMajor = 6;
+                ctxVmm->kernel.dwVersionMinor = 1;
+            } else if(ctxVmm->kernel.dwVersionBuild >= 6000) {  // VISTA
+                ctxVmm->kernel.dwVersionMajor = 6;
+                ctxVmm->kernel.dwVersionMinor = 0;
+            } else {                                            // XP
+                ctxVmm->kernel.dwVersionMajor = 5;
+                ctxVmm->kernel.dwVersionMinor = 1;
+            }
+        }
     }
 }
 
@@ -899,21 +919,23 @@ BOOL VmmWinInit_TryInitialize(_In_opt_ QWORD paDTBOpt)
     HANDLE hThreadInitializeAsync;
     PVMM_PROCESS pObSystemProcess = NULL, pObProcess = NULL;
     // Fetch Directory Base (DTB (PML4)) and initialize Memory Model.
-    if(paDTBOpt) {
-        if(!VmmWinInit_DTB_Validate(paDTBOpt)) {
-            vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to verify user-supplied (0x%016llx) DTB. #1\n", paDTBOpt);
-            goto fail;
-        }
-    } else if(LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_DTB, &paDTBOpt)) {
+
+    QWORD vaKERN1 = 0, vaKERN2;
+    LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_KERNELBASE, &vaKERN1);
+    LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_KERNELHINT, &vaKERN2);
+
+    if(paDTBOpt && !VmmWinInit_DTB_Validate(paDTBOpt)) {
+        vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to verify user-supplied (0x%016llx) DTB. #1\n", paDTBOpt);
+        goto fail;
+    }
+    if(!ctxVmm->kernel.paDTB && LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_DTB, &paDTBOpt)) {
         if(!VmmWinInit_DTB_Validate(paDTBOpt)) {
             vmmprintfv("VmmWinInit_TryInitialize: Warning: Unable to verify crash-dump supplied DTB. (0x%016llx) #1\n", paDTBOpt);
-            goto fail;
         }
-    } else if(!ctxVmm->kernel.paDTB) {
-        if(!VmmWinInit_DTB_FindValidate()) {
-            vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to locate valid DTB. #2\n");
-            goto fail;
-        }
+    }
+    if(!ctxVmm->kernel.paDTB && !VmmWinInit_DTB_FindValidate()) {
+        vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to locate valid DTB. #2\n");
+        goto fail;
     }
     vmmprintfvv_fn("INFO: DTB  located at: %016llx. MemoryModel: %s\n", ctxVmm->kernel.paDTB, VMM_MEMORYMODEL_TOSTRING[ctxVmm->tpMemoryModel]);
     // Fetch 'ntoskrnl.exe' base address
