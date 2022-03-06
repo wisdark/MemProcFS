@@ -29,21 +29,21 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
@@ -51,7 +51,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
@@ -243,12 +243,14 @@
     <ClInclude Include="vmm.h" />
     <ClInclude Include="vmmdll.h" />
     <ClInclude Include="vmmevil.h" />
+    <ClInclude Include="vmmlog.h" />
     <ClInclude Include="vmmnet.h" />
     <ClInclude Include="vmmproc.h" />
     <ClInclude Include="vmmwin.h" />
     <ClInclude Include="vmmwindef.h" />
     <ClInclude Include="vmmwininit.h" />
     <ClInclude Include="vmmwinobj.h" />
+    <ClInclude Include="vmmwinpool.h" />
     <ClInclude Include="vmmwinreg.h" />
     <ClInclude Include="vmmwinsvc.h" />
   </ItemGroup>
@@ -277,6 +279,7 @@
     <ClCompile Include="m_memmap.c" />
     <ClCompile Include="m_minidump.c" />
     <ClCompile Include="m_phys2virt.c" />
+    <ClCompile Include="m_proc_search.c" />
     <ClCompile Include="m_proc_token.c" />
     <ClCompile Include="m_sys.c" />
     <ClCompile Include="m_sys_cert.c" />
@@ -284,6 +287,7 @@
     <ClCompile Include="m_sys_mem.c" />
     <ClCompile Include="m_sys_net.c" />
     <ClCompile Include="m_sys_obj.c" />
+    <ClCompile Include="m_sys_pool.c" />
     <ClCompile Include="m_sys_proc.c" />
     <ClCompile Include="m_sys_svc.c" />
     <ClCompile Include="m_sys_syscall.c" />
@@ -297,6 +301,7 @@
     <ClCompile Include="ob\ob_compressed.c" />
     <ClCompile Include="ob\ob_container.c" />
     <ClCompile Include="ob\ob_core.c" />
+    <ClCompile Include="ob\ob_counter.c" />
     <ClCompile Include="ob\ob_map.c" />
     <ClCompile Include="ob\ob_memfile.c" />
     <ClCompile Include="ob\ob_set.c" />
@@ -311,7 +316,9 @@
     <ClCompile Include="vmm.c" />
     <ClCompile Include="vmmdll.c" />
     <ClCompile Include="m_ldrmodules.c" />
+    <ClCompile Include="vmmdll_scatter.c" />
     <ClCompile Include="vmmevil.c" />
+    <ClCompile Include="vmmlog.c" />
     <ClCompile Include="vmmnet.c" />
     <ClCompile Include="vmmproc.c" />
     <ClCompile Include="vmmwin.c" />
@@ -319,6 +326,7 @@
     <ClCompile Include="m_virt2phys.c" />
     <ClCompile Include="vmmwininit.c" />
     <ClCompile Include="vmmwinobj.c" />
+    <ClCompile Include="vmmwinpool.c" />
     <ClCompile Include="vmmwinreg.c" />
     <ClCompile Include="vmmwinsvc.c" />
   </ItemGroup>

@@ -1,9 +1,9 @@
 // vfslist.h : definitions related to vfs directory listings.
 //
-// (c) Ulf Frisk, 2021
+// (c) Ulf Frisk, 2021-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
-#include "vfs.h"
+#include "vfslist.h"
 #include "ob/ob.h"
 #include "charutil.h"
 
@@ -12,6 +12,9 @@ typedef struct tdVFSLIST_CONTEXT {
     FILETIME ftDefaultTime;
     time_t time_default;
     POB_CACHEMAP pcm;
+    VFS_LIST_U_PFN pfnVfsListU;
+    BOOL fSingleThread;
+    CRITICAL_SECTION Lock;
 } VFSLIST_CONTEXT, *PVFSLIST_CONTEXT;
 
 VFSLIST_CONTEXT g_ctxVfsList = { 0 };
@@ -122,7 +125,7 @@ VOID VfsList_AddDirectory(_Inout_ HANDLE hFileList, _In_ LPSTR uszName, _In_opt_
 PVFSLISTOB_DIRECTORY VfsList_GetDirectory(_In_ LPSTR uszPath)
 {
     QWORD i = 0, qwHash;
-    PVFSLISTOB_DIRECTORY pObDir;
+    PVFSLISTOB_DIRECTORY pObDir = NULL;
     VMMDLL_VFS_FILELIST2 VfsFileList;
     CHAR c, uszPathCopy[3 * MAX_PATH];
     // 1: try fetch from cache:
@@ -130,24 +133,35 @@ PVFSLISTOB_DIRECTORY VfsList_GetDirectory(_In_ LPSTR uszPath)
     if((pObDir = ObCacheMap_GetByKey(g_ctxVfsList.pcm, qwHash))) {
         return pObDir;
     }
+    if(g_ctxVfsList.fSingleThread) {
+        EnterCriticalSection(&g_ctxVfsList.Lock);
+        if((pObDir = ObCacheMap_GetByKey(g_ctxVfsList.pcm, qwHash))) {
+            LeaveCriticalSection(&g_ctxVfsList.Lock);
+            return pObDir;
+        }
+    }
     // 2: replace forward-slash with backward slash for MemProcFS compatibility
     strncpy_s(uszPathCopy, sizeof(uszPathCopy), uszPath, _TRUNCATE);
     while((c = uszPathCopy[i++])) {
         if(c == '/') { uszPathCopy[i - 1] = '\\'; }
     }
     // 3: create new:
-    if(!(pObDir = Ob_Alloc('VFSD', LMEM_ZEROINIT, sizeof(VFSLISTOB_DIRECTORY), (VOID(*)(PVOID))VfsList_CallbackCleanup_ObDirectory, NULL))) { return NULL; }
+    pObDir = Ob_Alloc('VFSD', LMEM_ZEROINIT, sizeof(VFSLISTOB_DIRECTORY), (VOID(*)(PVOID))VfsList_CallbackCleanup_ObDirectory, NULL);
+    if(!pObDir) { goto fail; }
     pObDir->Dir.magic = VFSLIST_CONFIG_FILELIST_MAGIC;
     VfsFileList.dwVersion = VMMDLL_VFS_FILELIST_VERSION;
     VfsFileList.h = (HANDLE)&pObDir->Dir;
     VfsFileList.pfnAddFile = VfsList_AddFile;
     VfsFileList.pfnAddDirectory = VfsList_AddDirectory;
-    if(VMMDLL_VfsListU(uszPathCopy, &VfsFileList)) {
+    if(g_ctxVfsList.pfnVfsListU(uszPathCopy, &VfsFileList)) {
         pObDir->tc64 = GetTickCount64();
         pObDir->qwHash = qwHash;
         ObCacheMap_Push(g_ctxVfsList.pcm, qwHash, pObDir, 0);
+        if(g_ctxVfsList.fSingleThread) { LeaveCriticalSection(&g_ctxVfsList.Lock); }
         return pObDir;
     }
+fail:
+    if(g_ctxVfsList.fSingleThread) { LeaveCriticalSection(&g_ctxVfsList.Lock); }
     Ob_DECREF(pObDir);
     return NULL;
 }
@@ -212,6 +226,86 @@ BOOL VfsList_GetSingle(_In_ LPSTR uszPath, _In_ LPSTR uszFile, _Out_ PVFS_ENTRY 
 }
 
 /*
+* Clear cached directory entries and/or files.
+* -- uszPath = the directory path to clear including/excluding file name.
+*/
+VOID VfsList_Clear(_In_ LPSTR uszPath)
+{
+    CHAR uszPathSplit[3 * MAX_PATH] = { 0 };
+    CharUtil_PathSplitLastEx(uszPath, uszPathSplit, _countof(uszPathSplit));
+    Ob_DECREF(ObCacheMap_RemoveByKey(g_ctxVfsList.pcm, CharUtil_HashPathFsU(uszPath)));
+    Ob_DECREF(ObCacheMap_RemoveByKey(g_ctxVfsList.pcm, CharUtil_HashPathFsU(uszPathSplit)));
+}
+
+#ifdef _WIN32
+
+_Success_(return)
+BOOL VfsList_EntryUtoW(_In_ PVFS_ENTRY peVfs, _Out_ PWIN32_FIND_DATAW pFindData)
+{
+    pFindData->dwFileAttributes = peVfs->dwFileAttributes;
+    pFindData->ftCreationTime = peVfs->ftCreationTime;
+    pFindData->ftLastAccessTime = peVfs->ftLastAccessTime;
+    pFindData->ftLastWriteTime = peVfs->ftLastWriteTime;
+    pFindData->nFileSizeHigh = (DWORD)(peVfs->cbFileSize >> 32);
+    pFindData->nFileSizeLow = (DWORD)(peVfs->cbFileSize);
+    CharUtil_UtoW(peVfs->uszName, -1, (PBYTE)pFindData->cFileName, sizeof(pFindData->cFileName), NULL, NULL, CHARUTIL_FLAG_TRUNCATE_ONFAIL_NULLSTR | CHARUTIL_FLAG_STR_BUFONLY);
+    return TRUE;
+}
+
+/*
+* Retrieve information about a single entry inside a directory (Windows WCHAR version).
+* -- wszPath
+* -- wszFile
+* -- pFindData
+* -- pfPathValid = receives if wszPath is valid or not.
+* -- return
+*/
+_Success_(return)
+BOOL VfsList_GetSingleW(_In_ LPWSTR wszPath, _In_ LPWSTR wszFile, _Out_ PWIN32_FIND_DATAW pFindData, _Out_ PBOOL pfPathValid)
+{
+    VFS_ENTRY eVfs;
+    LPSTR uszPath, uszFile;
+    BYTE pbBuffer1[2 * MAX_PATH], pbBuffer2[MAX_PATH];
+    if(!CharUtil_WtoU(wszPath, -1, pbBuffer1, sizeof(pbBuffer1), &uszPath, NULL, 0)) { return FALSE; }
+    if(!CharUtil_WtoU(wszFile, -1, pbBuffer2, sizeof(pbBuffer2), &uszFile, NULL, 0)) { return FALSE; }
+    if(!VfsList_GetSingle(uszPath, uszFile, &eVfs, pfPathValid)) { return FALSE; }
+    return VfsList_EntryUtoW(&eVfs, pFindData);
+}
+
+/*
+* List a directory using a callback function (Windows WCHAR version).
+* -- wszPath
+* -- ctx = optional context to pass along to callback function.
+* -- pfnListCallback = callback function called one time per directory entry.
+* -- return = TRUE if directory exists, otherwise FALSE.
+*/
+BOOL VfsList_ListDirectoryW(_In_ LPWSTR wszPath, _In_opt_ PVOID ctx, _In_opt_ PFN_VFSLISTW_CALLBACK pfnListCallback)
+{
+    DWORD i;
+    PVFSLIST_DIRECTORY pDir;
+    PVFSLISTOB_DIRECTORY pObDir;
+    WIN32_FIND_DATAW eFindData = { 0 };
+    LPSTR uszPath;
+    BYTE pbBuffer[3 * MAX_PATH];
+    if(!CharUtil_WtoU(wszPath, -1, pbBuffer, sizeof(pbBuffer), &uszPath, NULL, 0)) { return FALSE; }
+    if(!(pObDir = VfsList_GetDirectory(uszPath))) { return FALSE; }
+    if(pfnListCallback) {
+        pDir = &pObDir->Dir;
+        while(pDir) {
+            for(i = 0; i < pDir->cFiles; i++) {
+                VfsList_EntryUtoW(pDir->pFilesU + i, &eFindData);
+                pfnListCallback(&eFindData, ctx);
+            }
+            pDir = pDir->FLink;
+        }
+    }
+    Ob_DECREF(pObDir);
+    return TRUE;
+}
+
+#endif /* _WIN32 */
+
+/*
 * Evaluate whether a given cachemap entry is still valid time wise.
 * -- qwContext
 * -- qwKey
@@ -220,6 +314,8 @@ BOOL VfsList_GetSingle(_In_ LPSTR uszPath, _In_ LPSTR uszFile, _Out_ PVFS_ENTRY 
 */
 BOOL VfsList_ValidEntry(_Inout_ PQWORD qwContext, _In_ QWORD qwKey, _In_ PVFSLISTOB_DIRECTORY pvObject)
 {
+    UNREFERENCED_PARAMETER(qwContext);
+    UNREFERENCED_PARAMETER(qwKey);
     return pvObject->tc64 + g_ctxVfsList.qwCacheValidMs > GetTickCount64();
 }
 
@@ -229,17 +325,22 @@ BOOL VfsList_ValidEntry(_Inout_ PQWORD qwContext, _In_ QWORD qwKey, _In_ PVFSLIS
 void VfsList_Close()
 {
     Ob_DECREF(g_ctxVfsList.pcm);
+    if(g_ctxVfsList.fSingleThread) {
+        DeleteCriticalSection(&g_ctxVfsList.Lock);
+    }
     ZeroMemory(&g_ctxVfsList, sizeof(VFSLIST_CONTEXT));
 }
 
 /*
 * Initialize the vfs list functionality.
+* -- pfnVfsListU
 * -- dwCacheValidMs
 * -- cCacheMaxEntries
+* -- fSingleThread = pfnVfsListU is single-threaded
 * -- return
 */
 _Success_(return)
-BOOL VfsList_Initialize(_In_ DWORD dwCacheValidMs, _In_ DWORD cCacheMaxEntries)
+BOOL VfsList_Initialize(_In_ VFS_LIST_U_PFN pfnVfsListU, _In_ DWORD dwCacheValidMs, _In_ DWORD cCacheMaxEntries, _In_ BOOL fSingleThread)
 {
     g_ctxVfsList.pcm = ObCacheMap_New(
         cCacheMaxEntries,
@@ -248,6 +349,17 @@ BOOL VfsList_Initialize(_In_ DWORD dwCacheValidMs, _In_ DWORD cCacheMaxEntries)
     );
     if(!g_ctxVfsList.pcm) { return FALSE; }
     g_ctxVfsList.qwCacheValidMs = dwCacheValidMs;
+    g_ctxVfsList.pfnVfsListU = pfnVfsListU;
+    if(fSingleThread) {
+        InitializeCriticalSection(&g_ctxVfsList.Lock);
+        g_ctxVfsList.fSingleThread = TRUE;
+    }
+#ifdef _WIN32
+    SYSTEMTIME SystemTimeNow;
+    GetSystemTime(&SystemTimeNow);
+    SystemTimeToFileTime(&SystemTimeNow, &g_ctxVfsList.ftDefaultTime);
+#else
     g_ctxVfsList.ftDefaultTime = (time(NULL) * 10000000) + 116444736000000000;
+#endif /* _WIN32 */
     return TRUE;
 }

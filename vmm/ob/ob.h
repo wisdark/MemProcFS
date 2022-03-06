@@ -1,58 +1,30 @@
 // ob.h : definitions related to the object manager and object manager collections.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OB_H__
 #define __OB_H__
+
+#ifdef _WIN32
+#include <Windows.h>
+typedef unsigned __int64                QWORD, *PQWORD;
+#else
 #include "../oscompatibility.h"
+#endif /* _WIN32 */
 
 #define OB_DEBUG
 #define OB_HEADER_MAGIC                 0x0c0efefe
 
 #define OB_TAG_CORE_CONTAINER           'ObCo'
 #define OB_TAG_CORE_COMPRESSED          'ObCp'
+#define OB_TAG_CORE_COUNTER             'ObCn'
 #define OB_TAG_CORE_DATA                'ObDa'
 #define OB_TAG_CORE_SET                 'ObSe'
 #define OB_TAG_CORE_MAP                 'ObMa'
 #define OB_TAG_CORE_MEMFILE             'ObMF'
 #define OB_TAG_CORE_CACHEMAP            'ObMc'
 #define OB_TAG_CORE_STRMAP              'ObMs'
-#define OB_TAG_INFODB_CTX               'IDBC'
-#define OB_TAG_MAP_PTE                  'Mpte'
-#define OB_TAG_MAP_VAD                  'Mvad'
-#define OB_TAG_MAP_VADEX                'Mvae'
-#define OB_TAG_MAP_MODULE               'Mmod'
-#define OB_TAG_MAP_UNLOADEDMODULE       'Mumd'
-#define OB_TAG_MAP_EAT                  'Meat'
-#define OB_TAG_MAP_IAT                  'Miat'
-#define OB_TAG_MAP_THREAD               'Mthr'
-#define OB_TAG_MAP_HANDLE               'Mhnd'
-#define OB_TAG_MAP_OBJECT               'Mobj'
-#define OB_TAG_MAP_KDRIVER              'Mdrv'
-#define OB_TAG_MAP_PHYSMEM              'Mmem'
-#define OB_TAG_MAP_USER                 'Musr'
-#define OB_TAG_MAP_SERVICE              'Msvc'
-#define OB_TAG_MAP_NET                  'Mnet'
-#define OB_TAG_MAP_PFN                  'Mpfn'
-#define OB_TAG_MAP_EVIL                 'Mevl'
-#define OB_TAG_MAP_TASK                 'Mtsk'
-#define OB_TAG_MOD_MINIDUMP_CTX         'mMDx'
-#define OB_TAG_OBJ_ERROR                'Oerr'
-#define OB_TAG_OBJ_FILE                 'Ofil'
-#define OB_TAG_OBJ_DISPLAY              'Odis'
-#define OB_TAG_PDB_CTX                  'PdbC'
-#define OB_TAG_PDB_ENTRY                'PdbE'
-#define OB_TAG_PFN_CONTEXT              'PfnC'
-#define OB_TAG_PFN_PROC_TABLE           'PfnT'
-#define OB_TAG_REG_HIVE                 'Rhve'
-#define OB_TAG_REG_KEY                  'Rkey'
-#define OB_TAG_REG_KEYVALUE             'Rval'
-#define OB_TAG_VMM_PROCESS              'Ps__'
-#define OB_TAG_VMM_PROCESS_CLONE        'PsC_'
-#define OB_TAG_VMM_PROCESS_PERSISTENT   'PsSt'
-#define OB_TAG_VMM_PROCESSTABLE         'PsTb'
-#define OB_TAG_VMMVFS_DUMPCONTEXT       'CDmp'
 
 // ----------------------------------------------------------------------------
 // OBJECT MANAGER CORE FUNCTIONALITY BELOW:
@@ -388,7 +360,7 @@ typedef struct tdOB_MAP *POB_MAP;
 /*
 * Create a new map. A map (ObMap) provides atomic map operations and ways
 * to optionally map key values to values, pointers or object manager objects.
-* The ObSet is an object manager object and must be DECREF'ed when required.
+* The ObMap is an object manager object and must be DECREF'ed when required.
 * CALLER DECREF: return
 * -- flags = defined by OB_MAP_FLAGS_*
 * -- return
@@ -1055,5 +1027,150 @@ BOOL ObMemFile_AppendString(_In_opt_ POB_MEMFILE pmf, _In_opt_z_ LPSTR sz);
 */
 _Success_(return == 0)
 NTSTATUS ObMemFile_ReadFile(_In_opt_ POB_MEMFILE pmf, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
+
+
+
+// ----------------------------------------------------------------------------
+// COUNTER FUNCTIONALITY BELOW
+// 
+// The counter is a auto-growing object that allows counting an unknown amount
+// of objects. Counting operations are thread-safe and atomic.
+// 
+// When counting is completed the counted objects may be retrieved sorted.
+//
+// The ObCounter is an object manager object and must be DECREF'ed when required.
+// ----------------------------------------------------------------------------
+
+typedef struct tdOB_COUNTER *POB_COUNTER;
+
+typedef struct tdOB_COUNTER_ENTRY {
+    QWORD k;
+    QWORD v;
+} OB_COUNTER_ENTRY, *POB_COUNTER_ENTRY, **PPOB_COUNTER_ENTRY;
+
+#define OB_COUNTER_FLAGS_SHOW_ZERO      0x01
+#define OB_COUNTER_FLAGS_ALLOW_NEGATIVE 0x02
+
+/*
+* Create a new counter. A counter (ObCounter) provides atomic counting operations.
+* The ObCounter is an object manager object and must be DECREF'ed when required.
+* CALLER DECREF: return
+* -- flags = defined by OB_COUNTER_FLAGS_*
+* -- return
+*/
+POB_COUNTER ObCounter_New(_In_ QWORD flags);
+
+/*
+* Retrieve the number of counted keys the ObCounter.
+* -- pc
+* -- return
+*/
+DWORD ObCounter_Size(_In_opt_ POB_COUNTER pc);
+
+/*
+* Retrieve the total count of the ObCounter.
+* NB! The resulting count may overflow on large counts!
+* -- pc
+* -- return
+*/
+QWORD ObCounter_CountAll(_In_opt_ POB_COUNTER pc);
+
+/*
+* Check if the counted key exists in the ObCounter.
+* -- pc
+* -- k
+* -- return
+*/
+BOOL ObCounter_Exists(_In_opt_ POB_COUNTER pc, _In_ QWORD k);
+
+/*
+* Get the count of a specific key.
+* -- pc
+* -- k
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Get(_In_opt_ POB_COUNTER pc, _In_ QWORD k);
+
+/*
+* Remove a specific key.
+* -- pc
+* -- k
+* -- return = the count of the removed key, zero in fail.
+*/
+QWORD ObCounter_Del(_In_opt_ POB_COUNTER pc, _In_ QWORD k);
+
+/*
+* Set the count of a specific key.
+* -- pc
+* -- k
+* -- v
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Set(_In_opt_ POB_COUNTER pc, _In_ QWORD k, _In_ QWORD v);
+
+/*
+* Add the count v of a specific key.
+* -- pc
+* -- k
+* -- v
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Add(_In_opt_ POB_COUNTER pc, _In_ QWORD k, _In_ QWORD v);
+
+/*
+* Increment the count of a specific key with 1.
+* -- pc
+* -- k
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Inc(_In_opt_ POB_COUNTER pc, _In_ QWORD k);
+
+/*
+* Subtract the count v of a specific key.
+* -- pc
+* -- k
+* -- v
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Sub(_In_opt_ POB_COUNTER pc, _In_ QWORD k, _In_ QWORD v);
+
+/*
+* Decrement the count of a specific key with 1.
+* -- pc
+* -- k
+* -- return = the counted value after the action, zero on fail.
+*/
+QWORD ObCounter_Dec(_In_opt_ POB_COUNTER pc, _In_ QWORD k);
+
+/*
+* Retrieve all counts in an unsorted table.
+* -- pc
+* -- cEntries
+* -- pEntries
+* -- return
+*/
+_Success_(return)
+BOOL ObCounter_GetAll(_In_opt_ POB_COUNTER pc, _In_ DWORD cEntries, _Out_writes_opt_(cEntries) POB_COUNTER_ENTRY pEntries);
+
+/*
+* Retrieve all counts in a sorted table.
+* -- pc
+* -- cEntries
+* -- pEntries
+* -- return
+*/
+_Success_(return)
+BOOL ObCounter_GetAllSortedByKey(_In_opt_ POB_COUNTER pc, _In_ DWORD cEntries, _Out_writes_opt_(cEntries) POB_COUNTER_ENTRY pEntries);
+
+/*
+* Retrieve all counts in a sorted table.
+* -- pc
+* -- cEntries
+* -- pEntries
+* -- return
+*/
+_Success_(return)
+BOOL ObCounter_GetAllSortedByCount(_In_opt_ POB_COUNTER pc, _In_ DWORD cEntries, _Out_writes_opt_(cEntries) POB_COUNTER_ENTRY pEntries);
+
 
 #endif /* __OB_H__ */

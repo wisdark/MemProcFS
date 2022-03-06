@@ -28,21 +28,21 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
@@ -50,7 +50,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
     <SpectreMitigation>false</SpectreMitigation>
@@ -214,13 +214,14 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="memprocfs.c" />
+    <ClCompile Include="charutil.c" />
+    <ClCompile Include="memprocfs_dokan.c" />
+    <ClCompile Include="memprocfs_fuse.c" />
     <ClCompile Include="ob\ob_cachemap.c" />
     <ClCompile Include="ob\ob_core.c" />
     <ClCompile Include="ob\ob_map.c" />
     <ClCompile Include="ob\ob_set.c" />
-    <ClCompile Include="util.c" />
-    <ClCompile Include="vfsdokan.c" />
+    <ClCompile Include="oscompatibility.c" />
     <ClCompile Include="vfslist.c" />
   </ItemGroup>
   <ItemGroup>
@@ -229,12 +230,17 @@
     <ClInclude Include="..\includes\leechcore.h" />
     <ClInclude Include="..\includes\public.h" />
     <ClInclude Include="..\includes\vmmdll.h" />
+    <ClInclude Include="charutil.h" />
     <ClInclude Include="ob\ob.h" />
+    <ClInclude Include="oscompatibility.h" />
     <ClInclude Include="version.h" />
-    <ClInclude Include="vfs.h" />
+    <ClInclude Include="vfslist.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="MemProcFS.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

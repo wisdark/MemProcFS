@@ -1,13 +1,15 @@
 // vmm.h : definitions related to virtual memory management support.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __VMM_H__
 #define __VMM_H__
 #include "oscompatibility.h"
 #include "leechcore.h"
+#include "vmmlog.h"
 #include "ob/ob.h"
+#include "ob/ob_tag.h"
 
 #ifndef STRINGIZE2
 #define STRINGIZE2(s) #s
@@ -435,6 +437,67 @@ typedef struct tdVMM_MAP_KDRIVERENTRY {
     QWORD MajorFunction[28];
 } VMM_MAP_KDRIVERENTRY, *PVMM_MAP_KDRIVERENTRY;
 
+typedef enum tdVMM_MAP_POOL_TP {
+    VMM_MAP_POOL_TP_Unknown        = 0,
+    VMM_MAP_POOL_TP_NonPagedPool   = 1,
+    VMM_MAP_POOL_TP_NonPagedPoolNx = 2,
+    VMM_MAP_POOL_TP_PagedPool      = 3
+} VMM_MAP_POOL_TP;
+
+typedef enum tdVMM_MAP_POOL_TPSS {
+    VMM_MAP_POOL_TPSS_UNKNOWN = 0,
+    VMM_MAP_POOL_TPSS_NA      = 1,
+    VMM_MAP_POOL_TPSS_BIG     = 2,
+    VMM_MAP_POOL_TPSS_LARGE   = 3,
+    VMM_MAP_POOL_TPSS_VS      = 4,
+    VMM_MAP_POOL_TPSS_LFH     = 5
+} VMM_MAP_POOL_TPSS;
+
+static LPCSTR VMM_POOL_TP_STRING[] = {
+    "Unknown",
+    "NonPaged",
+    "NonPagedNx",
+    "Paged"
+};
+
+static LPCSTR VMM_POOL_TPSS_STRING[] = {
+    "Unk",
+    "Std",
+    "Big",
+    "Lrg",
+    "Vs ",
+    "Lfh"
+};
+
+typedef struct tdVMM_MAP_POOLENTRYTAG {
+    union {
+        CHAR szTag[5];
+        struct {
+            DWORD dwTag;
+            DWORD _Filler;
+            DWORD cEntry;
+            DWORD iTag2Map;
+        };
+        OB_COUNTER_ENTRY ce;
+    };
+} VMM_MAP_POOLENTRYTAG, *PVMM_MAP_POOLENTRYTAG;
+
+typedef struct tdVMM_MAP_POOLENTRY {
+    QWORD va;
+    union {
+        CHAR szTag[5];
+        struct {
+            DWORD dwTag;
+            BYTE _ReservedZero;
+            BYTE fAlloc;
+            BYTE tpPool;    // VMM_MAP_POOL_TP
+            BYTE tpSS;      // VMM_MAP_POOL_TPSS
+        };
+    };
+    DWORD cb;
+    DWORD _Filler;
+} VMM_MAP_POOLENTRY, *PVMM_MAP_POOLENTRY;
+
 typedef struct tdVMM_MAP_NETENTRY {
     DWORD dwPID;
     DWORD dwState;
@@ -645,6 +708,15 @@ typedef struct tdVMMOB_MAP_KDRIVER {
     DWORD cMap;                     // # map entries.
     VMM_MAP_KDRIVERENTRY pMap[];    // map entries.
 } VMMOB_MAP_KDRIVER, *PVMMOB_MAP_KDRIVER;
+
+typedef struct tdVMMOB_MAP_POOL {
+    OB ObHdr;
+    PDWORD piTag2Map;               // dword map array (size: cMap): tag index to map index.
+    PVMM_MAP_POOLENTRYTAG pTag;
+    DWORD cTag;
+    DWORD cMap;                     // # map entries.
+    VMM_MAP_POOLENTRY pMap[];       // map entries.
+} VMMOB_MAP_POOL, *PVMMOB_MAP_POOL;
 
 typedef struct tdVMMOB_MAP_NET {
     OB ObHdr;
@@ -884,7 +956,6 @@ typedef struct tdVMM_MEMORYMODEL_FUNCTIONS {
 // ----------------------------------------------------------------------------
 
 typedef struct tdVmmConfig {
-    CHAR szMountPoint[1];
     QWORD paCR3;
     DWORD tpForensicMode;                 // command line forensic mode
     // flags below
@@ -903,6 +974,8 @@ typedef struct tdVmmConfig {
     CHAR szPageFile[10][MAX_PATH];
     CHAR szMemMap[MAX_PATH];
     CHAR szMemMapStr[2048];
+    CHAR szLogFile[MAX_PATH];
+    CHAR szLogLevel[MAX_PATH];
 } VMMCONFIG, *PVMMCONFIG;
 
 typedef struct tdVMM_STATISTICS {
@@ -1165,6 +1238,7 @@ typedef struct tdVMM_CONTEXT {
             DWORD cEvent;
             HANDLE hEvent[MAXIMUM_WAIT_OBJECTS];
         } fc;
+        DWORD dwNextMID;
     } PluginManager;
     CRITICAL_SECTION LockUpdateMap;     // lock for global maps - such as MapUser
     CRITICAL_SECTION LockUpdateModule;  // lock for internal modules
@@ -1177,6 +1251,8 @@ typedef struct tdVMM_CONTEXT {
     POB_CONTAINER pObCMapNet;
     POB_CONTAINER pObCMapObject;
     POB_CONTAINER pObCMapKDriver;
+    POB_CONTAINER pObCMapPoolAll;
+    POB_CONTAINER pObCMapPoolBig;
     POB_CONTAINER pObCMapService;
     POB_CONTAINER pObCInfoDB;
     POB_CONTAINER pObCCachePrefetchEPROCESS;
@@ -1227,23 +1303,7 @@ typedef struct tdVMM_MAIN_CONTEXT {
 extern PVMM_CONTEXT ctxVmm;
 extern PVMM_MAIN_CONTEXT ctxMain;
 
-#define vmmprintf(format, ...)          { if(ctxMain->cfg.fVerboseDll)       { printf(format, ##__VA_ARGS__); } }
-#define vmmprintfv(format, ...)         { if(ctxMain->cfg.fVerbose)          { printf(format, ##__VA_ARGS__); } }
-#define vmmprintfvv(format, ...)        { if(ctxMain->cfg.fVerboseExtra)     { printf(format, ##__VA_ARGS__); } }
-#define vmmprintfvvv(format, ...)       { if(ctxMain->cfg.fVerboseExtraTlp)  { printf(format, ##__VA_ARGS__); } }
-#define vmmprintf_fn(format, ...)       vmmprintf("%s: "format, __func__, ##__VA_ARGS__);
-#define vmmprintfv_fn(format, ...)      vmmprintfv("%s: "format, __func__, ##__VA_ARGS__);
-#define vmmprintfvv_fn(format, ...)     vmmprintfvv("%s: "format, __func__, ##__VA_ARGS__);
-#define vmmprintfvvv_fn(format, ...)    vmmprintfvvv("%s: "format, __func__, ##__VA_ARGS__);
 
-#define vmmwprintf(format, ...)          { if(ctxMain->cfg.fVerboseDll)       { wprintf(format, ##__VA_ARGS__); } }
-#define vmmwprintfv(format, ...)         { if(ctxMain->cfg.fVerbose)          { wprintf(format, ##__VA_ARGS__); } }
-#define vmmwprintfvv(format, ...)        { if(ctxMain->cfg.fVerboseExtra)     { wprintf(format, ##__VA_ARGS__); } }
-#define vmmwprintfvvv(format, ...)       { if(ctxMain->cfg.fVerboseExtraTlp)  { wprintf(format, ##__VA_ARGS__); } }
-#define vmmwprintf_fn(format, ...)       vmmwprintf(L"%S: "format, __func__, ##__VA_ARGS__);
-#define vmmwprintfv_fn(format, ...)      vmmwprintfv(L"%S: "format, __func__, ##__VA_ARGS__);
-#define vmmwprintfvv_fn(format, ...)     vmmwprintfvv(L"%S: "format, __func__, ##__VA_ARGS__);
-#define vmmwprintfvvv_fn(format, ...)    vmmwprintfvvv(L"%S: "format, __func__, ##__VA_ARGS__);
 
 // ----------------------------------------------------------------------------
 // INITIALIZE/CLOSE FUNCTIONALITY BELOW:
@@ -1559,6 +1619,61 @@ VOID VmmVirt2PhysGetInformation(_Inout_ PVMM_PROCESS pProcess, _Inout_ PVMM_VIRT
 * -- return
 */
 PVMMOB_PHYS2VIRT_INFORMATION VmmPhys2VirtGetInformation(_In_ PVMM_PROCESS pProcess, _In_ QWORD paTarget);
+
+#define VMM_MEMORY_SEARCH_MAX               16
+
+typedef struct tdVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY {
+    DWORD cbAlign;              // byte-align at 2^x - 0, 1, 2, 4, 8, 16, .. bytes.
+    DWORD cb;                   // number of bytes to search (1-32).
+    BYTE pb[32];
+    BYTE pbSkipMask[32];        // skip bitmask '0' = match, '1' = wildcard.
+} VMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY, *PVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY;
+
+/*
+* Memory Search Context used to configure a search by the VmmSearch() function.
+*/
+typedef struct tdVMM_MEMORY_SEARCH_CONTEXT {
+    DWORD _Filler[3];
+    BOOL fAbortRequested;       // may be set by caller to abort processing prematurely.
+    DWORD cMaxResult;           // # max result entries. '0' = 1 entry. max 0x10000 entries.
+    DWORD cSearch;              // number of valid search entries
+    VMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY search[VMM_MEMORY_SEARCH_MAX];
+    QWORD vaMin;                // min address to search (page-aligned).
+    QWORD vaMax;                // max address to search (page-aligned), if 0 max memory is assumed.
+    QWORD vaCurrent;            // current address (may be read by caller).
+    DWORD _Filler2;
+    DWORD cResult;              // number of search hits.
+    QWORD cbReadTotal;          // total number of bytes read.
+    PVOID pvUserPtrOpt;         // optional pointer set by caller (used for context passing to callbacks)
+    // optional result callback function.
+    // use of callback function disable ordinary result in ppObAddressResult.
+    // return = continue search(TRUE), abort search(FALSE).
+    BOOL(*pfnResultOptCB)(_In_ struct tdVMM_MEMORY_SEARCH_CONTEXT *ctxs, _In_ QWORD va, _In_ DWORD iSearch);
+    // non-recommended features:
+    QWORD ReadFlags;            // read flags as in VMM_FLAG_*
+    BOOL fForcePTE;             // force PTE method for virtual address reads.
+    BOOL fForceVAD;             // force VAD method for virtual address reads.
+    // optional filter callback function for virtual address reads:
+    // for ranges inbetween vaMin:vaMax callback with pte or vad entry.
+    // return: read from range(TRUE), do not read from range(FALSE).
+    BOOL(*pfnFilterOptCB)(_In_ struct tdVMM_MEMORY_SEARCH_CONTEXT *ctxs, _In_opt_ PVMM_MAP_PTEENTRY pePte, _In_opt_ PVMM_MAP_VADENTRY peVad);
+} VMM_MEMORY_SEARCH_CONTEXT, *PVMM_MEMORY_SEARCH_CONTEXT;
+
+/*
+* Search for binary data in an address space specified by the parameter pctx.
+* For more information about the different search parameters please see the
+* struct definition: VMM_MEMORY_SEARCH_CONTEXT
+* Search may take a long time. It's not recommended to run this interactively.
+* To cancel a search prematurely set the fAbortRequested flag in pctx and
+* wait a short while.
+* CALLER DECREF: ppObAddressResult
+* -- pProcess
+* -- ctxs
+* -- ppObAddress
+* -- return
+*/
+_Success_(return)
+BOOL VmmSearch(_In_opt_ PVMM_PROCESS pProcess, _Inout_ PVMM_MEMORY_SEARCH_CONTEXT ctxs, _Out_opt_ POB_DATA *ppObAddressResult);
 
 
 
@@ -1993,6 +2108,36 @@ BOOL VmmMap_GetObject(_Out_ PVMMOB_MAP_OBJECT *ppObObjectMap);
 */
 _Success_(return)
 BOOL VmmMap_GetKDriver(_Out_ PVMMOB_MAP_KDRIVER *ppObKDriverMap);
+
+/*
+* Retrieve the index of a VMM_MAP_POOLENTRYTAG within the PVMMOB_MAP_POOL.
+* -- pPoolMap
+* -- dwPoolTag
+* -- pdwTagIndex
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetPoolTag(_In_ PVMMOB_MAP_POOL pPoolMap, _In_ DWORD dwPoolTag, _Out_ PDWORD pdwTagIndex);
+
+/*
+* Retrieve the index of a VMM_MAP_POOLENTRY within the PVMMOB_MAP_POOL.
+* -- pPoolMap
+* -- vaPoolEntry
+* -- pdwEntryIndex
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetPoolEntry(_In_ PVMMOB_MAP_POOL pPoolMap, _In_ QWORD vaPoolEntry, _Out_ PDWORD pdwEntryIndex);
+
+/*
+* Retrieve the POOL map.
+* CALLER DECREF: ppObPoolMap
+* -- ppObPoolMap
+* -- fAll = TRUE: retrieve all pools; FALSE: retrieve big page pool only.
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetPool(_Out_ PVMMOB_MAP_POOL *ppObPoolMap, _In_ BOOL fAll);
 
 /*
 * Retrieve the NETWORK CONNECTION map

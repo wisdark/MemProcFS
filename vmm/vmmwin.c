@@ -1,7 +1,7 @@
 // vmmwin.c : implementation related to operating system and process
 // parsing of virtual memory. Windows related features only.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -35,7 +35,7 @@ PIMAGE_NT_HEADERS VmmWin_GetVerifyHeaderPE(_In_ PVMM_PROCESS pProcess, _In_opt_ 
     }
     dosHeader = (PIMAGE_DOS_HEADER)pbModuleHeader; // dos header.
     if(!dosHeader || dosHeader->e_magic != IMAGE_DOS_SIGNATURE) { return NULL; }
-    if(dosHeader->e_lfanew > 0x800) { return NULL; }
+    if((dosHeader->e_lfanew < 0) || (dosHeader->e_lfanew > 0x800)) { return NULL; }
     ntHeader = (PIMAGE_NT_HEADERS)(pbModuleHeader + dosHeader->e_lfanew); // nt header
     if(!ntHeader || ntHeader->Signature != IMAGE_NT_SIGNATURE) { return NULL; }
     if((ntHeader->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) && (ntHeader->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)) { return NULL; }
@@ -516,7 +516,7 @@ VOID VmmWinLdrModule_Initialize64(_In_ PVMM_PROCESS pProcess, _Inout_ POB_MAP pm
             if(!VmmRead(pProcess, vaModuleLdr64, pbLdrModule64, sizeof(LDR_MODULE64))) { continue; }
         }
         if(!pLdrModule64->BaseAddress || (pLdrModule64->BaseAddress & 0xfff)) { continue; }
-        if(!pLdrModule64->SizeOfImage || (pLdrModule64->SizeOfImage >= 0x10000000)) { continue; }
+        if(!pLdrModule64->SizeOfImage || (pLdrModule64->SizeOfImage >= 0x40000000)) { continue; }
         if(!pLdrModule64->BaseDllName.Length || pLdrModule64->BaseDllName.Length >= 0x1000) { continue; }
         ZeroMemory(&oModule, sizeof(VMM_MAP_MODULEENTRY));
         oModule.vaBase = pLdrModule64->BaseAddress;
@@ -1184,7 +1184,7 @@ BOOL VmmWinUnloadedModule_Initialize(_In_ PVMM_PROCESS pProcess)
 PVMMWIN_USER_PROCESS_PARAMETERS VmmWin_UserProcessParameters_Get(_In_ PVMM_PROCESS pProcess)
 {
     BOOL f;
-    LPWSTR wszTMP;
+    LPWSTR wszTMP = NULL;
     QWORD vaUserProcessParameters = 0;
     PVMMWIN_USER_PROCESS_PARAMETERS pu = &pProcess->pObPersistent->UserProcessParams;
     if(pu->fProcessed || pProcess->dwState) { return pu; }
@@ -1204,9 +1204,11 @@ PVMMWIN_USER_PROCESS_PARAMETERS VmmWin_UserProcessParameters_Get(_In_ PVMM_PROCE
             VmmReadAllocUnicodeString(pProcess, ctxVmm->f32, 0, vaUserProcessParameters + (ctxVmm->f32 ? 0x030 : 0x050), 0x400, &wszTMP, NULL);      // DllPath (mutually exclusive with ImagePathName?)
         }
         CharUtil_WtoU(wszTMP, 0x400, NULL, 0, &pu->uszImagePathName, &pu->cbuImagePathName, CHARUTIL_FLAG_ALLOC);
+        LocalFree(wszTMP); wszTMP = NULL;
         // CommandLine
         VmmReadAllocUnicodeString(pProcess, ctxVmm->f32, 0, vaUserProcessParameters + (ctxVmm->f32 ? 0x040 : 0x070), 0x800, &wszTMP, NULL);
         CharUtil_WtoU(wszTMP, 0x800, NULL, 0, &pu->uszCommandLine, &pu->cbuCommandLine, CHARUTIL_FLAG_ALLOC);
+        LocalFree(wszTMP); wszTMP = NULL;
     }
     pu->fProcessed = TRUE;
     LeaveCriticalSection(&pProcess->LockUpdate);
@@ -2676,6 +2678,7 @@ PVMMOB_MAP_PHYSMEM VmmWinPhysMemMap_InitializeFromRegistry_DoWork()
         }
         if((pObPhysMemMap->pMap[i].pa & 0xfff) || (pObPhysMemMap->pMap[i].cb & 0xfff)) { goto fail; }
     }
+    LocalFree(pbData);
     return pObPhysMemMap;
 fail:
     Ob_DECREF(pObPhysMemMap);
@@ -2995,13 +2998,13 @@ VOID VmmWinUser_Refresh()
 VOID VmmWinProcess_OffsetLocator_Print()
 {
     PVMM_OFFSET_EPROCESS po = &ctxVmm->offset.EPROCESS;
-    vmmprintf_fn("OK: %s \n" \
-        "    PID:  %03x PPID: %03x STAT: %03x DTB:  %03x DTBU: %03x NAME: %03x PEB: %03x\n" \
-        "    FLnk: %03x BLnk: %03x oMax: %03x SeAu: %03x VadR: %03x ObjT: %03x WoW: %03x\n",
-        po->fValid ? "TRUE" :  "FALSE",
-        po->PID, po->PPID, po->State, po->DTB, po->DTB_User, po->Name, po->PEB,
-        po->FLink, po->BLink, po->cbMaxOffset, po->SeAuditProcessCreationInfo, po->VadRoot, po->ObjectTable, po->Wow64Process
-    );
+    VMMLOG_LEVEL dwLogLevel = po->fValid ? LOGLEVEL_DEBUG : LOGLEVEL_WARNING;
+    VmmLog(MID_PROCESS, dwLogLevel, "OK: %s",
+        (po->fValid ? "TRUE" : "FALSE"));
+    VmmLog(MID_PROCESS, dwLogLevel, "    PID:  %03x PPID: %03x STAT: %03x DTB:  %03x DTBU: %03x NAME: %03x PEB: %03x",
+        po->PID, po->PPID, po->State, po->DTB, po->DTB_User, po->Name, po->PEB);
+    VmmLog(MID_PROCESS, dwLogLevel, "    FLnk: %03x BLnk: %03x oMax: %03x SeAu: %03x VadR: %03x ObjT: %03x WoW: %03x",
+        po->FLink, po->BLink, po->cbMaxOffset, po->SeAuditProcessCreationInfo, po->VadRoot, po->ObjectTable, po->Wow64Process);
 }
 
 VOID VmmWinProcess_OffsetLocator_SetMaxOffset()
@@ -3065,10 +3068,7 @@ VOID VmmWinProcess_OffsetLocator64(_In_ PVMM_PROCESS pSystemProcess)
     POB_SET psObOff = NULL, psObVa = NULL;
     ZeroMemory(po, sizeof(VMM_OFFSET_EPROCESS));
     if(!VmmRead(pSystemProcess, pSystemProcess->win.EPROCESS.va, pbSYSTEM, VMMPROC_EPROCESS64_MAX_SIZE)) { return; }
-    if(ctxMain->cfg.fVerboseExtra) {
-        vmmprintf_fn("SYSTEM DTB: %016llx EPROCESS: %016llx\n", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
-        Util_PrintHexAscii(pbSYSTEM, VMMPROC_EPROCESS64_MAX_SIZE, 0);
-    }
+    VmmLogHexAsciiEx(MID_PROCESS, LOGLEVEL_DEBUG, pbSYSTEM, VMMPROC_EPROCESS64_MAX_SIZE, 0, "SYSTEM DTB: %016llx EPROCESS: %016llx", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
     // find offset State (static for now)
     if(*(PDWORD)(pbSYSTEM + 0x04)) { return; }
     po->State = 0x04;
@@ -3121,10 +3121,7 @@ VOID VmmWinProcess_OffsetLocator64(_In_ PVMM_PROCESS pSystemProcess)
             if(f) { break; }
         }
         if(!f) { return; }
-        if(ctxMain->cfg.fVerboseExtra) {
-            vmmprintf_fn("EPROCESS smss.exe BELOW:\n");
-            Util_PrintHexAscii(pbSMSS, VMMPROC_EPROCESS64_MAX_SIZE, 0);
-        }
+        VmmLogHexAsciiEx(MID_PROCESS, LOGLEVEL_DEBUG, pbSMSS, VMMPROC_EPROCESS64_MAX_SIZE, 0, "EPROCESS smss.exe BELOW:");
     }
     // find offset for ParentPid (_EPROCESS!InheritedFromUniqueProcessId)
     // (parent pid is assumed to be located between BLink and Name
@@ -3381,7 +3378,7 @@ VOID VmmWinProcess_Enum64_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
             pb,
             cb);
         if(!pObProcess) {
-            vmmprintfv("VMM: WARNING: PID '%i' already exists or bad DTB.\n", *pdwPID);
+            VmmLog(MID_PROCESS, LOGLEVEL_VERBOSE, "WARNING: PID '%i' already exists or bad DTB", *pdwPID);
             if(++ctx->cNewProcessCollision >= 8) {
                 return;
             }
@@ -3392,7 +3389,7 @@ VOID VmmWinProcess_Enum64_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
         pObProcess->win.EPROCESS.fNoLink = ctx->fNoLinkEPROCESS;
         // PEB
         if(*pqwPEB & 0xfff) {
-            vmmprintfv("VMM: WARNING: Bad PEB alignment for PID: '%i' (0x%016llx).\n", *pdwPID, *pqwPEB);
+            VmmLog(MID_PROCESS, LOGLEVEL_VERBOSE, "WARNING: Bad PEB alignment for PID: '%i' (0x%016llx)", *pdwPID, *pqwPEB);
         } else {
             pObProcess->win.vaPEB = *pqwPEB;
         }
@@ -3408,7 +3405,7 @@ VOID VmmWinProcess_Enum64_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
     } else {
         szName[14] = 0; // in case of bad string data ...
     }
-    vmmprintfvv_fn("%04i (%s) %08x %012llx %016llx %012llx %s\n",
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "%04i (%s) %08x %012llx %016llx %012llx %s",
         ctx->cProc,
         !pObProcess ? "skip" : (pObProcess->dwState ? "exit" : "list"),
         *pdwPID,
@@ -3457,24 +3454,22 @@ BOOL VmmWinProcess_Enum64(_In_ PVMM_PROCESS pSystemProcess, _In_ BOOL fTotalRefr
     // retrieve offsets
     if(!po->fValid) {
         VmmWinProcess_OffsetLocator64(pSystemProcess);
-        if(!po->fValid || ctxMain->cfg.fVerboseExtra) {
-            VmmWinProcess_OffsetLocator_Print();
-        }
+        VmmWinProcess_OffsetLocator_Print();
         if(!po->fValid) {
-            vmmprintf("VmmWin: Unable to fuzz EPROCESS offsets - trying debug symbols.\n");
+            VmmLog(MID_PROCESS, LOGLEVEL_INFO, "Unable to fuzz EPROCESS offsets - trying debug symbols");
             VmmWinProcess_OffsetLocatorSYMSERV(pSystemProcess);
         }
         if(!po->fValid) {
-            vmmprintf("VmmWin: Unable to locate EPROCESS offsets.\n");
+            VmmLog(MID_PROCESS, LOGLEVEL_CRITICAL, "Unable to locate EPROCESS offsets");
             return FALSE;
         }
     }
-    vmmprintfvv_fn("SYSTEM DTB: %016llx EPROCESS: %016llx\n", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "SYSTEM DTB: %016llx EPROCESS: %016llx", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
     // set up context
     ctx.fTotalRefresh = fTotalRefresh;
     if(!(ctx.pObSetPrefetchDTB = ObSet_New())) { return FALSE; }
     // traverse EPROCESS linked list
-    vmmprintfvv_fn("        # STATE  PID      DTB          EPROCESS         PEB          NAME  \n");
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "   # STATE  PID      DTB          EPROCESS         PEB          NAME");
     VmmWin_ListTraversePrefetch(
         pSystemProcess,
         FALSE,
@@ -3515,10 +3510,7 @@ VOID VmmWinProcess_OffsetLocator32(_In_ PVMM_PROCESS pSystemProcess)
     POB_SET psObOff = NULL, psObVa = NULL;
     ZeroMemory(po, sizeof(VMM_OFFSET_EPROCESS));
     if(!VmmRead(pSystemProcess, pSystemProcess->win.EPROCESS.va, pbSYSTEM, VMMPROC_EPROCESS32_MAX_SIZE)) { return; }
-    if(ctxMain->cfg.fVerboseExtra) {
-        vmmprintf_fn("SYSTEM DTB: %016llx EPROCESS: %016llx\n", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
-        Util_PrintHexAscii(pbSYSTEM, VMMPROC_EPROCESS32_MAX_SIZE, 0);
-    }
+    VmmLogHexAsciiEx(MID_PROCESS, LOGLEVEL_DEBUG, pbSYSTEM, VMMPROC_EPROCESS32_MAX_SIZE, 0, "SYSTEM DTB: %016llx EPROCESS: %016llx", pSystemProcess->paDTB, pSystemProcess->win.EPROCESS.va);
     // find offset State (static for now)
     if(*(PDWORD)(pbSYSTEM + 0x04)) { return; }
     po->State = 0x04;
@@ -3570,10 +3562,7 @@ VOID VmmWinProcess_OffsetLocator32(_In_ PVMM_PROCESS pSystemProcess)
             if(f) { break; }
         }
         if(!f) { return; }
-        if(ctxMain->cfg.fVerboseExtra) {
-            vmmprintf_fn("EPROCESS smss.exe BELOW:\n");
-            Util_PrintHexAscii(pbSMSS, VMMPROC_EPROCESS32_MAX_SIZE, 0);
-        }
+        VmmLogHexAsciiEx(MID_PROCESS, LOGLEVEL_DEBUG, pbSMSS, VMMPROC_EPROCESS32_MAX_SIZE, 0, "EPROCESS smss.exe BELOW:");
     }
     // find offset for ParentPid (_EPROCESS!InheritedFromUniqueProcessId)
     // (parent pid is assumed to be located between BLink and Name
@@ -3734,7 +3723,7 @@ VOID VmmWinProcess_Enum32_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
             pb,
             cb);
         if(!pObProcess) {
-            vmmprintfv("VMM: WARNING: PID '%i' already exists or bad DTB.\n", *pdwPID);
+            VmmLog(MID_PROCESS, LOGLEVEL_VERBOSE, "WARNING: PID '%i' already exists or bad DTB", *pdwPID);
             if(++ctx->cNewProcessCollision >= 8) {
                 return;
             }
@@ -3745,7 +3734,7 @@ VOID VmmWinProcess_Enum32_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
         pObProcess->win.EPROCESS.fNoLink = ctx->fNoLinkEPROCESS;
         // PEB
         if(*pdwPEB & 0xfff) {
-            vmmprintfv("VMM: WARNING: Bad PEB alignment for PID: '%i' (0x%08x).\n", *pdwPID, *pdwPEB);
+            VmmLog(MID_PROCESS, LOGLEVEL_VERBOSE, "WARNING: Bad PEB alignment for PID: '%i' (0x%08x)", *pdwPID, *pdwPEB);
         } else {
             pObProcess->win.vaPEB = *pdwPEB;
             pObProcess->win.vaPEB32 = *pdwPEB;
@@ -3753,7 +3742,7 @@ VOID VmmWinProcess_Enum32_Post(_In_ PVMM_PROCESS pSystemProcess, _In_opt_ PVMMWI
     } else {
         szName[14] = 0; // in case of bad string data ...
     }
-    vmmprintfvv_fn("%04i (%s) %08x %08x %08x %08x %s\n",
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "%04i (%s) %08x %08x %08x %08x %s",
         ctx->cProc,
         !pObProcess ? "skip" : (pObProcess->dwState ? "exit" : "list"),
         *pdwPID,
@@ -3772,24 +3761,22 @@ BOOL VmmWinProcess_Enum32(_In_ PVMM_PROCESS pSystemProcess, _In_ BOOL fTotalRefr
     // retrieve offsets
     if(!po->fValid) {
         VmmWinProcess_OffsetLocator32(pSystemProcess);
-        if(!po->fValid || ctxMain->cfg.fVerboseExtra) {
-            VmmWinProcess_OffsetLocator_Print();
-        }
+        VmmWinProcess_OffsetLocator_Print();
         if(!po->fValid) {
-            vmmprintf("VmmWin: Unable to fuzz EPROCESS offsets - trying debug symbols.\n");
+            VmmLog(MID_PROCESS, LOGLEVEL_INFO, "Unable to fuzz EPROCESS offsets - trying debug symbols");
             VmmWinProcess_OffsetLocatorSYMSERV(pSystemProcess);
         }
         if(!po->fValid) {
-            vmmprintf("VmmWin: Unable to locate EPROCESS offsets.\n");
+            VmmLog(MID_PROCESS, LOGLEVEL_CRITICAL, "Unable to locate EPROCESS offsets");
             return FALSE;
         }
     }
-    vmmprintfvv_fn("SYSTEM DTB: %016llx EPROCESS: %08x\n", pSystemProcess->paDTB, (DWORD)pSystemProcess->win.EPROCESS.va);
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "SYSTEM DTB: %016llx EPROCESS: %08x", pSystemProcess->paDTB, (DWORD)pSystemProcess->win.EPROCESS.va);
     // set up context
     ctx.fTotalRefresh = fTotalRefresh;
     if(!(ctx.pObSetPrefetchDTB = ObSet_New())) { return FALSE; }
     // traverse EPROCESS linked list
-    vmmprintfvv_fn("        # STATE  PID      DTB      EPROCESS PEB      NAME\n");
+    VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "   # STATE  PID      DTB      EPROCESS PEB      NAME");
     VmmWin_ListTraversePrefetch(
         pSystemProcess,
         TRUE,
@@ -3859,7 +3846,7 @@ POB_SET VmmWinProcess_Enumerate_FindNoLinkProcesses()
             if(!psObNoLink && !(psObNoLink = ObSet_New())) { goto fail; }
             ObSet_Push(psOb, pe->vaObject);
             ObSet_Push(psObNoLink, pe->vaObject);
-            vmmprintfvv_fn("%016llx\n", pe->vaObject);
+            VmmLog(MID_PROCESS, LOGLEVEL_DEBUG, "NOLINK_EPROCESS: %016llx", pe->vaObject);
         }
     }
 fail:

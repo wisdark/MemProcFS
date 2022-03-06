@@ -1,8 +1,9 @@
 // oscompatibility.h : VMM Windows/Linux compatibility layer.
 //
-// (c) Ulf Frisk, 2021
+// (c) Ulf Frisk, 2021-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
+#ifdef LINUX
 #ifndef __OSCOMPATIBILITY_H__
 #define __OSCOMPATIBILITY_H__
 #include <leechcore.h>
@@ -208,3 +209,4 @@ VOID LocalFree(HANDLE hMem);
 QWORD GetTickCount64();
 
 #endif /* __OSCOMPATIBILITY_H__ */
+#endif /* LINUX */

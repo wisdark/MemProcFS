@@ -129,6 +129,12 @@
     <ClInclude Include="infodb.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="vmmwinpool.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="vmmlog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="vmmdll.c">
@@ -333,6 +339,24 @@
       <Filter>Source Files\modules</Filter>
     </ClCompile>
     <ClCompile Include="infodb.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="vmmwinpool.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="m_sys_pool.c">
+      <Filter>Source Files\modules</Filter>
+    </ClCompile>
+    <ClCompile Include="ob\ob_counter.c">
+      <Filter>Source Files\ob</Filter>
+    </ClCompile>
+    <ClCompile Include="vmmdll_scatter.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="m_proc_search.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="vmmlog.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

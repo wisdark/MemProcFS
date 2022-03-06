@@ -1,6 +1,6 @@
 // util.h : definitions of various utility functions.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __UTIL_H__
@@ -59,18 +59,6 @@ BOOL Util_HashSHA256(_In_reads_(cbData) PBYTE pbData, _In_ DWORD cbData, _Out_wr
 * -- uszPathFile
 */
 VOID Util_DeleteFileU(_In_ LPSTR uszPathFile);
-
-/*
-* Print a maximum of 8192 bytes of binary data as hexascii on the screen.
-* -- pb
-* -- cb
-* -- cbInitialOffset = offset, must be max 0x1000 and multiple of 0x10.
-*/
-VOID Util_PrintHexAscii(
-    _In_reads_(cb) PBYTE pb,
-    _In_ DWORD cb,
-    _In_ DWORD cbInitialOffset
-);
 
 /*
 * Fill a human readable hex ascii memory dump into the caller supplied sz buffer.
@@ -146,6 +134,11 @@ VOID Util_GetPathLib(_Out_writes_(MAX_PATH) PCHAR szPath);
 LPSTR Util_StrDupA(_In_opt_ LPSTR sz);
 
 /*
+* Retrieve the current time as FILETIME.
+*/
+QWORD Util_FileTimeNow();
+
+/*
 * Convert a FILETIME (ft) into a human readable string.
 * -- ft = the FILETIME in UTC time zone.
 * -- szTime = time in format '2020-01-01 23:59:59 UCT' (23 chars).
@@ -177,9 +170,15 @@ typedef int(*UTIL_QFIND_CMP_PFN)(_In_ QWORD qwFind, _In_ QWORD qwEntry);
 
 /*
 * Generic table search function to be used together with Util_qfind.
+* Finds an entry in a sorted DWORD table.
+*/
+int Util_qfind_CmpFindTableDWORD(_In_ QWORD qwFind, _In_ QWORD qwEntry);
+
+/*
+* Generic table search function to be used together with Util_qfind.
 * Finds an entry in a sorted QWORD table.
 */
-int Util_qfind_CmpFindTableQWORD(_In_ PVOID pvFind, _In_ PVOID pvEntry);
+int Util_qfind_CmpFindTableQWORD(_In_ QWORD pvFind, _In_ QWORD pvEntry);
 
 /*
 * Find an entry in a sorted array in an efficient way - O(log2(n)).
@@ -211,7 +210,8 @@ PVOID Util_qfind(_In_ QWORD qwFind, _In_ DWORD cMap, _In_ PVOID pvMap, _In_ DWOR
 */
 NTSTATUS Util_VfsReadFile_FromZERO(_In_ QWORD cbFile, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromPBYTE(_In_opt_ PBYTE pbFile, _In_ QWORD cbFile, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
-NTSTATUS Util_VfsReadFile_FromStrA(_In_opt_ LPSTR szFile, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
+NTSTATUS Util_VfsReadFile_FromHEXASCII(_In_opt_ PBYTE pbFile, _In_ QWORD cbFile, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
+NTSTATUS Util_VfsReadFile_FromStrA(_In_opt_ LPCSTR szFile, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromMEM(_In_opt_ PVMM_PROCESS pProcess, _In_ QWORD vaMEM, _In_ QWORD cbMEM, _In_ QWORD flags, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromObData(_In_opt_ POB_DATA pData, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromObCompressed(_In_opt_ POB_COMPRESSED pdc, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
@@ -226,7 +226,9 @@ NTSTATUS Util_VfsReadFile_usnprintf_ln(_Out_writes_to_(cb, *pcbRead) PBYTE pb, _
 NTSTATUS Util_VfsWriteFile_BOOL(_Inout_ PBOOL pfTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsWriteFile_09(_Inout_ PDWORD pdwTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsWriteFile_DWORD(_Inout_ PDWORD pdwTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset, _In_ DWORD dwMinAllow, _In_opt_ DWORD dwMaxAllow);
+NTSTATUS Util_VfsWriteFile_QWORD(_Inout_ PQWORD pqwTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset, _In_ QWORD qwMinAllow, _In_opt_ QWORD qwMaxAllow);
 NTSTATUS Util_VfsWriteFile_PBYTE(_Inout_ PBYTE pbTarget, _In_ DWORD cbTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset, _In_ BOOL fTerminatingNULL);
+NTSTATUS Util_VfsWriteFile_HEXASCII(_Inout_ PBYTE pbTarget, _In_ DWORD cbTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset);
 DWORD Util_ResourceSize(_In_ LPWSTR wszResourceName);
 VOID Util_VfsTimeStampFile(_In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo);
 
@@ -234,12 +236,13 @@ VOID Util_VfsTimeStampFile(_In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMDLL_VFS_FIL
 * Retrieve PID / ID number from path (in base10). This is commonly used to
 * parse pid from process name in the 'name' / 'pid' folders.
 * -- uszPath
+* -- fHex
 * -- pdwID
 * -- puszSubPath
 * -- return
 */
 _Success_(return)
-BOOL Util_VfsHelper_GetIdDir(_In_ LPSTR uszPath, _Out_ PDWORD pdwID, _Out_ LPSTR *puszSubPath);
+BOOL Util_VfsHelper_GetIdDir(_In_ LPSTR uszPath, _In_ BOOL fHex, _Out_ PDWORD pdwID, _Out_opt_ LPSTR *puszSubPath);
 
 #define UTIL_VFSLINEFIXED_LINECOUNT(c)            (c + (ctxMain->cfg.fFileInfoHeader ? 2ULL : 0ULL))
 
@@ -285,6 +288,47 @@ NTSTATUS Util_VfsLineFixed_Read(
     _In_ PVOID pMap,
     _In_ DWORD cMap,
     _In_ DWORD cbEntry,
+    _Out_writes_to_(cb, *pcbRead) PBYTE pb,
+    _In_ DWORD cb,
+    _Out_ PDWORD pcbRead,
+    _In_ QWORD cbOffset
+);
+
+/*
+* Util_VfsLineFixedMapCustom_Read: Callback function to retrieve an entry.
+* -- pMap
+* -- iMap
+*/
+typedef PVOID(*UTIL_VFSLINEFIXED_MAP_PFN_CB)(
+    _In_ PVOID ctxMap,
+    _In_ DWORD iMap
+    );
+
+/*
+* Util_VfsLineFixedMapCustom_Read: Read from a file dynamically created from a
+* custom generator callback function using using a callback function to
+* populate individual lines (excluding header).
+* -- pfnCallback = callback function to populate individual lines.
+* -- ctx = optional context to 'pfn' callback function.
+* -- cbLineLength = line length, including newline, excluding null terminator.
+* -- wszHeader = optional header line.
+* -- ctxMap = 'map context' for single entry callback function.
+* -- cMap = max number of entries entry callback function will generate.
+* -- pfnMap = callback function to retrieve entry.
+* -- pb
+* -- cb
+* -- pcbRead
+* -- cbOffset
+* -- return
+*/
+NTSTATUS Util_VfsLineFixedMapCustom_Read(
+    _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
+    _Inout_opt_ PVOID ctx,
+    _In_ DWORD cbLineLength,
+    _In_opt_ LPSTR uszHeader,
+    _In_ PVOID ctxMap,
+    _In_ DWORD cMap,
+    _In_ UTIL_VFSLINEFIXED_MAP_PFN_CB pfnMap,
     _Out_writes_to_(cb, *pcbRead) PBYTE pb,
     _In_ DWORD cb,
     _Out_ PDWORD pcbRead,

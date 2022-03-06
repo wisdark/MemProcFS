@@ -2,7 +2,7 @@
 //                systems. Contains functions for detecting DTB and Memory Model
 //                as well as the Windows kernel base and core functionality.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -407,7 +407,7 @@ QWORD VmmWinInit_FindNtosScanHint64(_In_ PVMM_PROCESS pSystemProcess, _In_ QWORD
             // check for (1) MZ+NT header, (2) POOLCODE section, (3) ntoskrnl.exe module name (if possible to read)
             pDosHeader = (PIMAGE_DOS_HEADER)(pb + p);                       // DOS header
             if(pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) { continue; }    // DOS header signature (MZ)
-            if(pDosHeader->e_lfanew > 0x800) { continue; }
+            if((pDosHeader->e_lfanew < 0) || (pDosHeader->e_lfanew > 0x800)) { continue; }
             pNtHeader = (PIMAGE_NT_HEADERS64)(pb + p + pDosHeader->e_lfanew); // NT header
             if(pNtHeader->Signature != IMAGE_NT_SIGNATURE) { continue; }    // NT header signature
             for(o = 0; o < 0x1000; o += 8) {
@@ -440,34 +440,35 @@ cleanup:
 */
 DWORD VmmWinInit_FindNtosScan32(_In_ PVMM_PROCESS pSystemProcess)
 {
-    DWORD o, p, vaNtosTry = 0;
+    DWORD vaBase, ova;
+    DWORD o, vaNtosTry = 0;
     PBYTE pb;
     CHAR szModuleName[MAX_PATH] = { 0 };
     PIMAGE_DOS_HEADER pDosHeader;
     PIMAGE_NT_HEADERS pNtHeader;
-    if(!(pb = LocalAlloc(LMEM_ZEROINIT, 0x04800000))) { return 0; }
-    for(p = 0; p < 0x04800000; p += 0x1000) {
-        // read 8MB chunks when required.
-        if(0 == p % 0x00800000) {
-            VmmReadEx(pSystemProcess, 0x80000000ULL + p, pb + p, 0x00800000, NULL, 0);
+    if(!(pb = LocalAlloc(LMEM_ZEROINIT, 0x00800000))) { return 0; }
+    for(vaBase = 0x80000000; vaBase < 0x88000000; vaBase += 0x1000) {
+        ova = vaBase % 0x00800000;
+        if(ova == 0) {
+            VmmReadEx(pSystemProcess, vaBase, pb, 0x00800000, NULL, 0);
         }
         // check for (1) MZ+NT header, (2) POOLCODE section, (3) ntoskrnl.exe module name (if possible to read)
-        pDosHeader = (PIMAGE_DOS_HEADER)(pb + p);                       // DOS header
-        if(pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) { continue; }    // DOS header signature (MZ)
-        if(pDosHeader->e_lfanew > 0x800) { continue; }
-        pNtHeader = (PIMAGE_NT_HEADERS)(pb + p + pDosHeader->e_lfanew); // NT header
-        if(pNtHeader->Signature != IMAGE_NT_SIGNATURE) { continue; }    // NT header signature
+        pDosHeader = (PIMAGE_DOS_HEADER)(pb + ova);                         // DOS header
+        if(pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) { continue; }        // DOS header signature (MZ)
+        if((pDosHeader->e_lfanew < 0) || (pDosHeader->e_lfanew > 0x800)) { continue; }
+        pNtHeader = (PIMAGE_NT_HEADERS)(pb + ova + pDosHeader->e_lfanew);   // NT header
+        if(pNtHeader->Signature != IMAGE_NT_SIGNATURE) { continue; }        // NT header signature
         for(o = 0; o < 0x800; o += 8) {
-            if(*(PQWORD)(pb + p + o) == 0x45444F434C4F4F50) {           // POOLCODE
-                if(!PE_GetModuleNameEx(pSystemProcess, 0x80000000ULL + p, FALSE, pb + p, szModuleName, _countof(szModuleName), NULL)) {
-                    vaNtosTry = 0x80000000 + p;
+            if(*(PQWORD)(pb + ova + o) == 0x45444F434C4F4F50) {             // POOLCODE
+                if(!PE_GetModuleNameEx(pSystemProcess, vaBase + ova, FALSE, pb + ova, szModuleName, _countof(szModuleName), NULL)) {
+                    vaNtosTry = vaBase;
                     continue;
                 }
-                if(_stricmp(szModuleName, "ntoskrnl.exe")) {            // not ntoskrnl.exe
+                if(_stricmp(szModuleName, "ntoskrnl.exe")) {                // not ntoskrnl.exe
                     continue;
                 }
                 LocalFree(pb);
-                return 0x80000000 + p;
+                return vaBase;
             }
         }
     }
@@ -842,7 +843,7 @@ QWORD VmmWinInit_FindSystemEPROCESS(_In_ PVMM_PROCESS pSystemProcess)
             vaSystemEPROCESS &= 0xffffffff;
         }
         pSystemProcess->win.EPROCESS.va = vaSystemEPROCESS;
-        vmmprintfvv_fn("INFO: PsInitialSystemProcess located at %016llx.\n", vaPsInitialSystemProcess);
+        VmmLog(MID_CORE, LOGLEVEL_DEBUG, "PsInitialSystemProcess located at %016llx", vaPsInitialSystemProcess);
         goto success;
     }
     // 2: fail - paging? try to retrive using PDB subsystem - this may take some time to initialize
@@ -866,7 +867,7 @@ QWORD VmmWinInit_FindSystemEPROCESS(_In_ PVMM_PROCESS pSystemProcess)
     }
     return 0;
 success:
-    vmmprintfvv_fn("INFO: EPROCESS located at %016llx.\n", vaSystemEPROCESS);
+    VmmLog(MID_CORE, LOGLEVEL_DEBUG, "EPROCESS located at %016llx", vaSystemEPROCESS);
     return vaSystemEPROCESS;
 }
 
@@ -925,36 +926,36 @@ BOOL VmmWinInit_TryInitialize(_In_opt_ QWORD paDTBOpt)
     LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_KERNELHINT, &vaKERN2);
 
     if(paDTBOpt && !VmmWinInit_DTB_Validate(paDTBOpt)) {
-        vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to verify user-supplied (0x%016llx) DTB. #1\n", paDTBOpt);
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Initialization Failed. Unable to verify user-supplied (0x%016llx) DTB. #1", paDTBOpt);
         goto fail;
     }
     if(!ctxVmm->kernel.paDTB && LcGetOption(ctxMain->hLC, LC_OPT_MEMORYINFO_OS_DTB, &paDTBOpt)) {
         if(!VmmWinInit_DTB_Validate(paDTBOpt)) {
-            vmmprintfv("VmmWinInit_TryInitialize: Warning: Unable to verify crash-dump supplied DTB. (0x%016llx) #1\n", paDTBOpt);
+            VmmLog(MID_CORE, LOGLEVEL_WARNING, "Unable to verify crash-dump supplied DTB. (0x%016llx) #1", paDTBOpt);
         }
     }
     if(!ctxVmm->kernel.paDTB && !VmmWinInit_DTB_FindValidate()) {
-        vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to locate valid DTB. #2\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Initialization Failed. Unable to locate valid DTB. #2");
         goto fail;
     }
-    vmmprintfvv_fn("INFO: DTB  located at: %016llx. MemoryModel: %s\n", ctxVmm->kernel.paDTB, VMM_MEMORYMODEL_TOSTRING[ctxVmm->tpMemoryModel]);
+    VmmLog(MID_CORE, LOGLEVEL_DEBUG, "DTB  located at: %016llx. MemoryModel: %s", ctxVmm->kernel.paDTB, VMM_MEMORYMODEL_TOSTRING[ctxVmm->tpMemoryModel]);
     // Fetch 'ntoskrnl.exe' base address
     if(!(pObSystemProcess = VmmWinInit_FindNtosScan())) {
-        vmmprintfv("VmmWinInit_TryInitialize: Initialization Failed. Unable to locate ntoskrnl.exe. #3\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Initialization Failed. Unable to locate ntoskrnl.exe. #3");
         goto fail;
     }
-    vmmprintfvv_fn("INFO: NTOS located at: %016llx.\n", ctxVmm->kernel.vaBase);
+    VmmLog(MID_CORE, LOGLEVEL_DEBUG, "NTOS located at: %016llx", ctxVmm->kernel.vaBase);
     // Initialize Paging (Limited Mode)
     MmWin_PagingInitialize(FALSE);
     // Locate System EPROCESS
     pObSystemProcess->win.EPROCESS.va = VmmWinInit_FindSystemEPROCESS(pObSystemProcess);
     if(!pObSystemProcess->win.EPROCESS.va) {
-        vmmprintfv_fn("Initialization Failed. Unable to locate EPROCESS. #4\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Initialization Failed. Unable to locate EPROCESS. #4");
         goto fail;
     }
     // Enumerate processes
     if(!VmmWinProcess_Enumerate(pObSystemProcess, TRUE, NULL)) {
-        vmmprintfv("VmmWinInit: Initialization Failed. Unable to walk EPROCESS. #5\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Initialization Failed. Unable to walk EPROCESS. #5");
         goto fail;
     }
     ctxVmm->tpSystem = (VMM_MEMORYMODEL_X64 == ctxVmm->tpMemoryModel) ? VMM_SYSTEM_WINDOWS_X64 : VMM_SYSTEM_WINDOWS_X86;

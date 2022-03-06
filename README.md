@@ -51,7 +51,7 @@ Installing:
 MemProcFS is dependent on the [LeechCore project](https://github.com/ufrisk/LeechCore) for memory acquisition. The necessary _leechcore.dll_ / _leechcore.so_ file is already pre-built and included together with the pre-built binaries.
 
 ## Windows
-Mounting the file system requires the <b>Dokany file system library</b> to be installed. Please download and install the latest version of Dokany at: https://github.com/dokan-dev/dokany/releases/latest It is recommended to download and install the <b>DokanSetup_redist</b> version.
+Mounting the file system requires the <b>Dokany file system library</b> to be installed. Please download and install the latest version of Dokany version 2 at: https://github.com/dokan-dev/dokany/releases/latest It is recommended to download and install the <b>DokanSetup_redist</b> version.
 
 Python support requires Python 3.6 or later. The user may specify the path to the Python installation with the command line parameter `-pythonhome`, alternatively download [Python 3.7 - Windows x86-64 embeddable zip file](https://www.python.org/downloads/windows/) and unzip its contents into the `files/python` folder when using Python modules in the file system. To use the Python API a normal 64-bit Python 3.6 or later installation for Windows is required.
 
@@ -89,7 +89,7 @@ Also check out my Microsoft BlueHatIL 2019 talk _Practical Uses for Hardware-ass
 
 Building:
 =========
-<b>Pre-built [binaries, modules and configuration files](https://github.com/ufrisk/MemProcFS/releases/latest) are found in the latest release.</b>. MemProcFS binaries are built with Visual Studio. MemProcFS is not supported on Linux.
+<b>Pre-built [binaries, modules and configuration files](https://github.com/ufrisk/MemProcFS/releases/latest) are found in the latest release.</b>. MemProcFS binaries are built with Visual Studio 2022 and Ubuntu x64/AARCH64.
 
 Detailed build instructions may be found in the [Wiki](https://github.com/ufrisk/MemProcFS/wiki) in the [Building](https://github.com/ufrisk/MemProcFS/wiki/Dev_Building) section.
 
@@ -273,6 +273,29 @@ v1.1-v2.10
 * 32-bit support for Windows and Linux (no 32-bit binary release yet).<br>
   Many thanks to [@JosiahWhite](https://github.com/JosiahWhite) for helping out getting me going and showing this was possible!
 
+[v4.4](https://github.com/ufrisk/MemProcFS/releases/tag/v4.4)
+* Bug fixes: large modules no longer missing.
+* Initial support for [kernel pool parsing](https://github.com/ufrisk/MemProcFS/wiki/FS_SysInfo_Pool).<br>
+  Thank you [@yarden_shafir](https://twitter.com/yarden_shafir) for the excellent [BlackHat talk](https://i.blackhat.com/USA21/Wednesday-Handouts/us-21-Windows-Heap-Backed-Pool-The-Good-The-Bad-And-The-Encoded.pdf) and [PoolViewer](https://github.com/yardenshafir/PoolViewer) tool.
+* Better network connection recovery.
+
+[v4.5](https://github.com/ufrisk/MemProcFS/releases/tag/v4.5)
+* Merge memprocfs (Windows) and memprocfs_fuse (Linux) projects.
+* New VMMDLL_Scatter_* API to simplify C/C++ ReadScatter use.
+* Pool parsing bug fixes.
+
+[v4.6](https://github.com/ufrisk/MemProcFS/releases/tag/v4.6)
+* New ReadScatter API for Python.
+* VMMDLL_Scatter_* API efficiency improvements for some smaller reads.
+* Visual Studio 2022 Support.
+* Upgrade to [Dokany2](https://github.com/dokan-dev/dokany/releases) (NB! Dokany2 will have to be installed!).
+
+[v4.7](https://github.com/ufrisk/MemProcFS/releases/tag/v4.7)
+* New memory search functionality (file system and API).
+* New/improved logging sub-system.
+* Minor API updates.
+
 Latest:
-* API: VMMDLL_Map_GetModuleFromName() support optional module name for primary module.
-* Windows 11 networking fixes.
+* Bug fixes.
+* Search API update.
+* C# support for New Scatter API.

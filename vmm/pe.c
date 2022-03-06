@@ -2,7 +2,7 @@
 //        in virtual address space. This may mostly (but not exclusively) be
 //        used by Windows functionality.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmm.h"
@@ -18,7 +18,7 @@ PIMAGE_NT_HEADERS PE_HeaderGetVerify(_In_ PVMM_PROCESS pProcess, _In_opt_ QWORD 
     }
     dosHeader = (PIMAGE_DOS_HEADER)pbModuleHeader; // dos header.
     if(!dosHeader || dosHeader->e_magic != IMAGE_DOS_SIGNATURE) { return NULL; }
-    if(dosHeader->e_lfanew > 0x800) { return NULL; }
+    if((dosHeader->e_lfanew < 0) || (dosHeader->e_lfanew > 0x800)) { return NULL; }
     ntHeader = (PIMAGE_NT_HEADERS)(pbModuleHeader + dosHeader->e_lfanew); // nt header
     if(!ntHeader || ntHeader->Signature != IMAGE_NT_SIGNATURE) { return NULL; }
     if((ntHeader->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) && (ntHeader->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)) { return NULL; }
@@ -610,7 +610,7 @@ BOOL PE_FileRaw_Read(_In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _Out_ 
     for(iRegion = 0; iRegion < PERegions.cRegions; iRegion++) {
         cbOffsetBuffer = PERegions.Region[iRegion].cbOffsetFile - cbOffset;
         if(cbOffsetBuffer + PERegions.Region[iRegion].cb > cb) {
-            vmmprintf_fn("WARNING: SHOULD NOT HAPPEN! potential buffer overflow avoided reading module at PID=%i BASE=%016llx\n", pProcess->dwPID, vaModuleBase);
+            VmmLog(MID_PE, LOGLEVEL_WARNING, "SHOULD NOT HAPPEN! potential buffer overflow avoided reading module at PID=%i BASE=%016llx", pProcess->dwPID, vaModuleBase);
             continue;
         }
         VmmReadEx(
@@ -644,7 +644,7 @@ BOOL PE_FileRaw_Write(_In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_r
     for(iRegion = 0; iRegion < PERegions.cRegions; iRegion++) {
         cbOffsetBuffer = PERegions.Region[iRegion].cbOffsetFile - cbOffset;
         if(cbOffsetBuffer + PERegions.Region[iRegion].cb > cb) {
-            vmmprintf_fn("WARNING: SHOULD NOT HAPPEN! potential buffer overflow avoided writing module at PID=%i BASE=%016llx\n", pProcess->dwPID, vaModuleBase);
+            VmmLog(MID_PE, LOGLEVEL_WARNING, "SHOULD NOT HAPPEN! potential buffer overflow avoided writing module at PID=%i BASE=%016llx", pProcess->dwPID, vaModuleBase);
             continue;
         }
         VmmWrite(

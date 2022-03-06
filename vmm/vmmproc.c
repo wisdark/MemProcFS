@@ -1,6 +1,6 @@
 // vmmproc.c : implementation of functions related to operating system and process parsing of virtual memory.
 //
-// (c) Ulf Frisk, 2018-2021
+// (c) Ulf Frisk, 2018-2022
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -10,6 +10,7 @@
 #include "vmmwininit.h"
 #include "vmmnet.h"
 #include "vmmwinobj.h"
+#include "vmmwinpool.h"
 #include "vmmwinreg.h"
 #include "vmmwinsvc.h"
 #include "mm_pfn.h"
@@ -33,7 +34,7 @@ BOOL VmmProcUserCR3TryInitialize64()
     pObProcess = VmmProcessCreateEntry(TRUE, 1, 0, 0, ctxMain->cfg.paCR3, 0, "unknown_process", FALSE, NULL, 0);
     VmmProcessCreateFinish();
     if(!pObProcess) {
-        vmmprintfv("VmmProc: FAIL: Initialization of Process failed from user-defined CR3 %016llx.\n", ctxMain->cfg.paCR3);
+        VmmLog(MID_CORE, LOGLEVEL_VERBOSE, "FAIL: Initialization of Process failed from user-defined CR3 %016llx", ctxMain->cfg.paCR3);
         VmmInitializeMemoryModel(VMM_MEMORYMODEL_NA);
         return FALSE;
     }
@@ -57,10 +58,10 @@ BOOL VmmProc_RefreshProcesses(_In_ BOOL fRefreshTotal)
     }
     // Windows OS
     if((ctxVmm->tpSystem == VMM_SYSTEM_WINDOWS_X64) || (ctxVmm->tpSystem == VMM_SYSTEM_WINDOWS_X86)) {
-        vmmprintfvv_fn("ProcessRefresh: %s\n", (fRefreshTotal ? "Total" : "Partial"));
+        VmmLog(MID_CORE, LOGLEVEL_DEBUG, "PROCESS_REFRESH: %s", (fRefreshTotal ? "Total" : "Partial"));
         pObProcessSystem = VmmProcessGet(4);
         if(!pObProcessSystem) {
-            vmmprintf_fn("FAIL - SYSTEM PROCESS NOT FOUND - SHOULD NOT HAPPEN\n");
+            VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "SYSTEM PROCESS NOT FOUND - SHOULD NOT HAPPEN");
             return FALSE;
         }
         fResult = VmmWinProcess_Enumerate(pObProcessSystem, fRefreshTotal, NULL);
@@ -129,7 +130,7 @@ BOOL VmmProcRefresh_Fast()
     ctxVmm->tcRefreshFast++;
     if(!VmmProc_RefreshProcesses(FALSE)) {
         LeaveCriticalSection(&ctxVmm->LockMaster);
-        vmmprintf("VmmProc: Failed to refresh MemProcFS - aborting.\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Failed to refresh MemProcFS - aborting!");
         return FALSE;
     }
     PluginManager_Notify(VMMDLL_PLUGIN_NOTIFY_REFRESH_FAST, NULL, 0);
@@ -144,7 +145,7 @@ BOOL VmmProcRefresh_Medium()
     ctxVmm->tcRefreshMedium++;
     if(!VmmProc_RefreshProcesses(TRUE)) {
         LeaveCriticalSection(&ctxVmm->LockMaster);
-        vmmprintf("VmmProc: Failed to refresh MemProcFS - aborting.\n");
+        VmmLog(MID_CORE, LOGLEVEL_CRITICAL, "Failed to refresh MemProcFS - aborting!");
         return FALSE;
     }
     VmmNet_Refresh();
@@ -163,6 +164,7 @@ BOOL VmmProcRefresh_Slow()
     VmmWinReg_Refresh();
     VmmWinUser_Refresh();
     VmmWinSvc_Refresh();
+    VmmWinPool_Refresh();
     VmmWinPhysMemMap_Refresh();
     PluginManager_Notify(VMMDLL_PLUGIN_NOTIFY_REFRESH_SLOW, NULL, 0);
     LeaveCriticalSection(&ctxVmm->LockMaster);
@@ -173,7 +175,7 @@ DWORD VmmProcCacheUpdaterThread()
 {
     QWORD i = 0;
     BOOL fRefreshMEM, fRefreshTLB, fRefreshFast, fRefreshMedium, fRefreshSlow;
-    vmmprintfv("VmmProc: Start periodic cache flushing.\n");
+    VmmLog(MID_CORE, LOGLEVEL_VERBOSE, "VmmProc: Start periodic cache flushing");
     if(ctxMain->dev.fRemote) {
         ctxVmm->ThreadProcCache.cMs_TickPeriod = VMMPROC_UPDATERTHREAD_REMOTE_PERIOD;
         ctxVmm->ThreadProcCache.cTick_MEM = VMMPROC_UPDATERTHREAD_REMOTE_MEM;
@@ -216,7 +218,7 @@ DWORD VmmProcCacheUpdaterThread()
         }
         LeaveCriticalSection(&ctxVmm->LockMaster);
     }
-    vmmprintfv("VmmProc: Exit periodic cache flushing.\n");
+    VmmLog(MID_CORE, LOGLEVEL_VERBOSE, "Exit periodic cache flushing");
     return 0;
 }
 
