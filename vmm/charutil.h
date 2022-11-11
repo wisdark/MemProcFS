@@ -161,17 +161,44 @@ BOOL CharUtil_WtoJ(
 );
 
 /*
+* Convert UTF-8 string into a CSV compatible string.
+* If source string contain either comma(,) space( ) doublequote(") it will be
+* treated as a CSV string and be put into double quotes at start/end.
+* Function support usz == pbBuffer - usz will then become overwritten.
+* CALLER LOCALFREE (if *pvsz != pbBuffer): *pvsz
+* -- usz = the string to convert.
+* -- cch = -1 for null-terminated string; or max number of chars (excl. null).
+* -- pbBuffer = optional buffer to place the result in.
+* -- cbBuffer
+* -- pvsz = if set to null: function calculate length only and return TRUE.
+            result utf-8 string, either as (*pvsz == pbBuffer) or LocalAlloc'ed
+*           buffer that caller is responsible for free.
+* -- pcbv = byte length (including terminating null) of utf-8 string.
+* -- flags = CHARUTIL_FLAG_NONE, CHARUTIL_FLAG_ALLOC or CHARUTIL_FLAG_TRUNCATE
+* -- return
+*/
+_Success_(return)
+BOOL CharUtil_UtoCSV(
+    _In_opt_ LPSTR usz,
+    _In_ DWORD cch,
+    _Maybenull_ _Writable_bytes_(cbBuffer) PBYTE pbBuffer,
+    _In_ DWORD cbBuffer,
+    _Out_opt_ LPSTR *pvsz,
+    _Out_opt_ PDWORD pcbv,
+    _In_ DWORD flags);
+
+/*
 * Hash a string quickly using the ROT13 algorithm either to a 64-bit or 32-bit number.
 * -- sz/usz/wsz = the string to hash
 * -- fUpper
 * -- return
 */
-DWORD CharUtil_Hash32U(_In_ LPCSTR usz, _In_ BOOL fUpper);
-DWORD CharUtil_Hash32A(_In_ LPCSTR sz, _In_ BOOL fUpper);
-DWORD CharUtil_Hash32W(_In_ LPCWSTR wsz, _In_ BOOL fUpper);
-QWORD CharUtil_Hash64U(_In_ LPCSTR usz, _In_ BOOL fUpper);
-QWORD CharUtil_Hash64A(_In_ LPCSTR sz, _In_ BOOL fUpper);
-QWORD CharUtil_Hash64W(_In_ LPCWSTR wsz, _In_ BOOL fUpper);
+DWORD CharUtil_Hash32U(_In_opt_ LPCSTR usz, _In_ BOOL fUpper);
+DWORD CharUtil_Hash32A(_In_opt_ LPCSTR sz, _In_ BOOL fUpper);
+DWORD CharUtil_Hash32W(_In_opt_ LPCWSTR wsz, _In_ BOOL fUpper);
+QWORD CharUtil_Hash64U(_In_opt_ LPCSTR usz, _In_ BOOL fUpper);
+QWORD CharUtil_Hash64A(_In_opt_ LPCSTR sz, _In_ BOOL fUpper);
+QWORD CharUtil_Hash64W(_In_opt_ LPCWSTR wsz, _In_ BOOL fUpper);
 
 /*
 * Hash a name string in a way that is supported by the file system.
@@ -220,6 +247,7 @@ DWORD CharUtil_FixFsNameU(
 * characters with '_'. Also optionally add a suffix between 1-9 and fix
 * upper-case letters. One of [usz, sz, wsz] must be valid.
 * -- uszOut
+* -- cbuDst
 * -- usz
 * -- sz
 * -- wsz
@@ -231,7 +259,8 @@ DWORD CharUtil_FixFsNameU(
 */
 _Success_(return != 0)
 DWORD CharUtil_FixFsName(
-    _Out_writes_(2*MAX_PATH) LPSTR uszOut,
+    _Out_writes_(cbuDst) LPSTR uszOut,
+    _In_ DWORD cbuDst,
     _In_opt_ LPCSTR usz,
     _In_opt_ LPCSTR sz,
     _In_opt_ LPCWSTR wsz,
@@ -296,6 +325,15 @@ LPSTR CharUtil_PathSplitLastEx(_In_ LPSTR usz, _Out_writes_(cbuPath) LPSTR uszPa
 * -- return
 */
 BOOL CharUtil_StrEndsWith(_In_opt_ LPSTR usz, _In_opt_ LPSTR uszEndsWith, _In_ BOOL fCaseInsensitive);
+
+/*
+* Checks if a string starts with a certain substring.
+* -- usz
+* -- uszStartsWith
+* -- fCaseInsensitive
+* -- return
+*/
+BOOL CharUtil_StrStartsWith(_In_opt_ LPSTR usz, _In_opt_ LPSTR uszStartsWith, _In_ BOOL fCaseInsensitive);
 
 /*
 * Compare a wide-char string to a utf-8 string.

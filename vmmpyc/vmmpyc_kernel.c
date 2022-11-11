@@ -7,12 +7,21 @@
 
 PyObject *g_pPyType_Kernel = NULL;
 
+// -> *PyLong
+static PyObject*
+VmmPycKernel_build(PyObj_Kernel *self, void *closure)
+{
+    QWORD qwBuild = 0;
+    VMMDLL_ConfigGet(self->pyVMM->hVMM, VMMDLL_OPT_WIN_VERSION_BUILD, &qwBuild);
+    return PyLong_FromLongLong(qwBuild);
+}
+
 // -> *PyObj_Process
 static PyObject*
 VmmPycKernel_process(PyObj_Kernel *self, void *closure)
 {
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Kernel.process: Not initialized."); }
-    return (PyObject*)VmmPycProcess_InitializeInternal(4, FALSE);
+    return (PyObject*)VmmPycProcess_InitializeInternal(self->pyVMM, 4, FALSE);
 }
 
 //-----------------------------------------------------------------------------
@@ -20,13 +29,14 @@ VmmPycKernel_process(PyObj_Kernel *self, void *closure)
 //-----------------------------------------------------------------------------
 
 PyObj_Kernel*
-VmmPycKernel_InitializeInternal()
+VmmPycKernel_InitializeInternal(_In_ PyObj_Vmm *pyVMM)
 {
     PyObj_Kernel *pyObjKernel;
     if(!(pyObjKernel = PyObject_New(PyObj_Kernel, (PyTypeObject*)g_pPyType_Kernel))) { return NULL; }
+    Py_INCREF(pyVMM); pyObjKernel->pyVMM = pyVMM;
     pyObjKernel->fValid = TRUE;
-    pyObjKernel->pyObjProcess = (PyObject*)VmmPycProcess_InitializeInternal(4, FALSE);
-    pyObjKernel->pyObjPdb = (PyObject*)VmmPycPdb_InitializeInternal2("nt");
+    pyObjKernel->pyObjProcess = (PyObject*)VmmPycProcess_InitializeInternal(pyVMM, 4, FALSE);
+    pyObjKernel->pyObjPdb = (PyObject*)VmmPycPdb_InitializeInternal2(pyVMM, "nt");    
     return pyObjKernel;
 }
 
@@ -47,6 +57,7 @@ static void
 VmmPycKernel_dealloc(PyObj_Kernel *self)
 {
     self->fValid = FALSE;
+    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
     Py_XDECREF(self->pyObjPdb); self->pyObjPdb = NULL;
     Py_XDECREF(self->pyObjProcess); self->pyObjProcess = NULL;
 }
@@ -62,6 +73,7 @@ BOOL VmmPycKernel_InitializeType(PyObject *pModule)
         {NULL}
     };
     static PyGetSetDef PyGetSet[] = {
+        {"build", (getter)VmmPycKernel_build, (setter)NULL, "build number", NULL},
         {"process", (getter)VmmPycKernel_process, (setter)NULL, "system process", NULL},
         {NULL}
     };

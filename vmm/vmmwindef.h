@@ -6,6 +6,8 @@
 #define __VMMWINDEF_H__
 #include "oscompatibility.h"
 
+#define O32_FILE_OBJECT_DeviceObject                    0x004
+#define O64_FILE_OBJECT_DeviceObject                    0x008
 #define O32_FILE_OBJECT_SectionObjectPointer            0x014
 #define O64_FILE_OBJECT_SectionObjectPointer            0x028
 #define O32_FILE_OBJECT_PrivateCacheMap                 0x018
@@ -470,5 +472,144 @@ typedef struct {
     DWORD PoolTag;
     QWORD ProcessBilled;
 } _POOL_HEADER64, *_PPOOL_HEADER64;
+
+static LPCSTR _KTHREAD_STATE_STR[] = {
+    "Init",
+    "Ready",
+    "Running",
+    "Standby",
+    "Term",
+    "Waiting",
+    "Transit",
+    "DeffRdy",
+    "GateWt"
+};
+
+static LPCSTR _KWAIT_REASON_STR[] = {
+   "Executive",
+   "FreePage",
+   "PageIn",
+   "PoolAllocation",
+   "DelayExecution",
+   "Suspended",
+   "UserRequest",
+   "WrExecutive",
+   "WrFreePage",
+   "WrPageIn",
+   "WrPoolAllocation",
+   "WrDelayExecution",
+   "WrSuspended",
+   "WrUserRequest",
+   "WrSpare0",
+   "WrQueue",
+   "WrLpcReceive",
+   "WrLpcReply",
+   "WrVirtualMemory",
+   "WrPageOut",
+   "WrRendezvous",
+   "WrKeyedEvent",
+   "WrTerminated",
+   "WrProcessInSwap",
+   "WrCpuRateControl",
+   "WrCalloutStack",
+   "WrKernel",
+   "WrResource",
+   "WrPushLock",
+   "WrMutex",
+   "WrQuantumEnd",
+   "WrDispatchInt",
+   "WrPreempted",
+   "WrYieldExecution",
+   "WrFastMutex",
+   "WrGuardedMutex",
+   "WrRundown",
+   "WrAlertByThreadId",
+   "WrDeferredPreempt",
+   "WrPhysicalFault"
+};
+
+// more extensive definition of the Windows LDR_DATA_TABLE_ENTRY struct.
+typedef struct _LDR_MODULE64 {
+    LIST_ENTRY64        InLoadOrderModuleList;
+    LIST_ENTRY64        InMemoryOrderModuleList;
+    LIST_ENTRY64        InInitializationOrderModuleList;
+    QWORD               BaseAddress;
+    QWORD               EntryPoint;
+    ULONG               SizeOfImage;
+    ULONG               _Filler1;
+    UNICODE_STRING64    FullDllName;
+    UNICODE_STRING64    BaseDllName;
+    ULONG               Flags;
+    SHORT               LoadCount;
+    SHORT               TlsIndex;
+    LIST_ENTRY64        HashTableEntry;
+    ULONG               TimeDateStamp;
+    ULONG               _Filler2;
+} LDR_MODULE64, *PLDR_MODULE64;
+
+typedef struct _LDR_MODULE32 {
+    LIST_ENTRY32        InLoadOrderModuleList;
+    LIST_ENTRY32        InMemoryOrderModuleList;
+    LIST_ENTRY32        InInitializationOrderModuleList;
+    DWORD               BaseAddress;
+    DWORD               EntryPoint;
+    ULONG               SizeOfImage;
+    UNICODE_STRING32    FullDllName;
+    UNICODE_STRING32    BaseDllName;
+    ULONG               Flags;
+    SHORT               LoadCount;
+    SHORT               TlsIndex;
+    LIST_ENTRY32        HashTableEntry;
+    ULONG               TimeDateStamp;
+} LDR_MODULE32, *PLDR_MODULE32;
+
+typedef struct _PEB_LDR_DATA32 {
+    BYTE Reserved1[8];
+    DWORD Reserved2;
+    LIST_ENTRY32 InLoadOrderModuleList;
+    LIST_ENTRY32 InMemoryOrderModuleList;
+    LIST_ENTRY32 InInitializationOrderModuleList;
+} PEB_LDR_DATA32, *PPEB_LDR_DATA32;
+
+typedef struct _PEB_LDR_DATA64 {
+    BYTE Reserved1[8];
+    QWORD Reserved2;
+    LIST_ENTRY64 InLoadOrderModuleList;
+    LIST_ENTRY64 InMemoryOrderModuleList;
+    LIST_ENTRY64 InInitializationOrderModuleList;
+} PEB_LDR_DATA64, *PPEB_LDR_DATA64;
+
+typedef struct _PEB32 {
+    BYTE Reserved1[2];
+    BYTE BeingDebugged;
+    BYTE Reserved2[1];
+    DWORD Reserved3[2];
+    DWORD Ldr;
+    DWORD ProcessParameters;
+    DWORD SubSystemData;
+    DWORD ProcessHeap;
+    DWORD Unknown1[27];
+    DWORD NumberOfHeaps;
+    DWORD MaximumNumberOfHeaps;
+    DWORD ProcessHeaps;
+    // ...
+} PEB32, *PPEB32;
+
+typedef struct _PEB64 {
+    BYTE Reserved1[2];
+    BYTE BeingDebugged;
+    BYTE Reserved2[1];
+    DWORD _Filler;
+    QWORD Reserved3[2];
+    QWORD Ldr;
+    QWORD ProcessParameters;
+    QWORD SubSystemData;
+    QWORD ProcessHeap;
+    QWORD Unknown1[22];
+    DWORD NumberOfHeaps;
+    DWORD MaximumNumberOfHeaps;
+    QWORD ProcessHeaps;
+    // ...
+} PEB64, *PPEB64;
 
 #endif /* __VMMWINDEF_H__ */

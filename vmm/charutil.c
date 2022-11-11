@@ -699,6 +699,108 @@ fail:
     return FALSE;
 }
 
+/*
+* Convert UTF-8 string into a CSV compatible string.
+* If source string contain either comma(,) space( ) doublequote(") it will be
+* treated as a CSV string and be put into double quotes at start/end.
+* Function support usz == pbBuffer - usz will then become overwritten.
+* CALLER LOCALFREE (if *pvsz != pbBuffer): *pvsz
+* -- usz = the string to convert.
+* -- cch = -1 for null-terminated string; or max number of chars (excl. null).
+* -- pbBuffer = optional buffer to place the result in.
+* -- cbBuffer
+* -- pvsz = if set to null: function calculate length only and return TRUE.
+            result utf-8 string, either as (*pvsz == pbBuffer) or LocalAlloc'ed
+*           buffer that caller is responsible for free.
+* -- pcbv = byte length (including terminating null) of utf-8 string.
+* -- flags = CHARUTIL_FLAG_NONE, CHARUTIL_FLAG_ALLOC or CHARUTIL_FLAG_TRUNCATE
+* -- return
+*/
+_Success_(return)
+BOOL CharUtil_UtoCSV(_In_opt_ LPSTR usz, _In_ DWORD cch, _Maybenull_ _Writable_bytes_(cbBuffer) PBYTE pbBuffer, _In_ DWORD cbBuffer, _Out_opt_ LPSTR *pvsz, _Out_opt_ PDWORD pcbv, _In_ DWORD flags)
+{
+    UCHAR c;
+    LPSTR vsz;
+    DWORD iu, iv, n, cbu = 0, cbv = 0;
+    BOOL fCSV = FALSE;
+    BOOL fTruncate = flags & CHARUTIL_FLAG_TRUNCATE;
+    if(pcbv) { *pcbv = 0; }
+    if(pvsz) { *pvsz = NULL; }
+    if(!usz) { usz = ""; }
+    if(cch > CHARUTIL_CONVERT_MAXSIZE) { cch = CHARUTIL_CONVERT_MAXSIZE; }
+    // 1: csv byte-length:
+    if(usz[0] == '\0') {
+        fCSV = TRUE;
+        cbv += 2;
+    }
+    if(fTruncate && (!cbBuffer || (flags & CHARUTIL_FLAG_ALLOC))) { goto fail; }
+    while((cbu < cch) && (c = usz[cbu])) {
+        if(c & 0x80) {
+            // utf-8 char:
+            n = 0;
+            if((c & 0xe0) == 0xc0) { n = 2; }
+            if((c & 0xf0) == 0xe0) { n = 3; }
+            if((c & 0xf8) == 0xf0) { n = 4; }
+            if(!n) { goto fail; }                                            // invalid char-encoding
+            if(cbu + n > cch) { break; }
+            if(fTruncate && (cbv + n >= cbBuffer)) { break; }
+            if((n > 1) && ((usz[cbu + 1] & 0xc0) != 0x80)) { goto fail; }    // invalid char-encoding
+            if((n > 2) && ((usz[cbu + 2] & 0xc0) != 0x80)) { goto fail; }    // invalid char-encoding
+            if((n > 3) && ((usz[cbu + 3] & 0xc0) != 0x80)) { goto fail; }    // invalid char-encoding
+            cbu += n;
+            cbv += n;
+        } else if(c == '"' || c == ' ' || c == ',') {
+            n = (c == '"') ? 2 : 1;
+            if(!fCSV) { n += 2; }
+            if(fTruncate && (cbv + n >= cbBuffer)) { break; }
+            fCSV = TRUE;
+            cbu += 1;
+            cbv += n;
+        } else {
+            if(fTruncate && (cbv + 1 >= cbBuffer)) { break; }
+            cbu += 1;
+            cbv += 1;
+        }
+    }
+    cbu++;
+    cbv++;
+    if(pcbv) { *pcbv = cbv; }
+    // 2: return on length-request or alloc-fail
+    if(!pvsz) {
+        if(!(flags & CHARUTIL_FLAG_STR_BUFONLY)) { return TRUE; }   // success: length request
+        if(flags & CHARUTIL_FLAG_ALLOC) { return FALSE; }
+    }
+    if(!(flags & CHARUTIL_FLAG_ALLOC) && (!pbBuffer || (cbBuffer < cbv))) { goto fail; } // fail: insufficient buffer space
+    vsz = (pbBuffer && (cbBuffer >= cbv)) ? pbBuffer : LocalAlloc(0, cbv);
+    if(!vsz) { goto fail; }                                                 // fail: failed buffer space allocation
+    // 3: populate with CSV UTF-8 string
+    iu = cbu - 2; iv = cbv - 2;
+    if(fCSV) { vsz[iv--] = '"'; }
+    while(iv < 0x7fffffff) {
+        if(!iv && fCSV) {
+            vsz[0] = '"';
+            break;
+        }
+        c = usz[iu--];
+        if(c == '"') {
+            vsz[iv--] = '"';
+        }
+        if(c < 0x20) {
+            c = '?';
+        }
+        vsz[iv--] = c;
+    }
+    vsz[cbv - 1] = 0;
+    if(pvsz) { *pvsz = vsz; }
+    return TRUE;
+fail:
+    if(!(flags ^ CHARUTIL_FLAG_TRUNCATE_ONFAIL_NULLSTR) && pbBuffer && cbBuffer) {
+        if(pvsz) { *pvsz = (LPSTR)pbBuffer; }
+        if(pcbv) { *pcbv = 1; }
+        pbBuffer[0] = 0;
+    }
+    return FALSE;
+}
 
 
 
@@ -766,6 +868,7 @@ DWORD CharUtil_FixFsNameU(_Out_writes_(cbuDst) LPSTR uszDst, _In_ DWORD cbuDst, 
 * characters with '_'. Also optionally add a suffix between 1-9 and fix
 * upper-case letters. One of [usz, sz, wsz] must be valid.
 * -- uszOut
+* -- cbuDst
 * -- usz
 * -- sz
 * -- wsz
@@ -776,17 +879,18 @@ DWORD CharUtil_FixFsNameU(_Out_writes_(cbuDst) LPSTR uszDst, _In_ DWORD cbuDst, 
 * -- return = number of bytes written (including terminating NULL).
 */
 _Success_(return != 0)
-DWORD CharUtil_FixFsName(_Out_writes_(2*MAX_PATH) LPSTR uszOut, _In_opt_ LPCSTR usz, _In_opt_ LPCSTR sz, _In_opt_ LPCWSTR wsz, _In_ DWORD cch, _In_opt_ DWORD iSuffix, _In_ BOOL fUpper)
+DWORD CharUtil_FixFsName(_Out_writes_(cbuDst) LPSTR uszOut, _In_ DWORD cbuDst, _In_opt_ LPCSTR usz, _In_opt_ LPCSTR sz, _In_opt_ LPCWSTR wsz, _In_ DWORD cch, _In_opt_ DWORD iSuffix, _In_ BOOL fUpper)
 {
     UCHAR c;
     DWORD i = 0;
     LPSTR uszTMP;
     uszOut[0] = 0;
     // 1: convert correct size utf-8
+    if(cbuDst < 5) { return 0; }
     if(!sz && !usz && !wsz) { return 0; }
-    if(sz && !CharUtil_AtoU((LPSTR)sz, cch, (PBYTE)uszOut, 2 * MAX_PATH - 3, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
-    if(wsz && !CharUtil_WtoU((LPWSTR)wsz, cch, (PBYTE)uszOut, 2 * MAX_PATH - 3, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
-    if(usz && !CharUtil_UtoU((LPSTR)usz, cch, (PBYTE)uszOut, 2 * MAX_PATH - 3, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
+    if(sz && !CharUtil_AtoU((LPSTR)sz, cch, (PBYTE)uszOut, cbuDst - 4, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
+    if(wsz && !CharUtil_WtoU((LPWSTR)wsz, cch, (PBYTE)uszOut, cbuDst - 4, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
+    if(usz && !CharUtil_UtoU((LPSTR)usz, cch, (PBYTE)uszOut, cbuDst - 4, &uszTMP, NULL, CHARUTIL_FLAG_TRUNCATE)) { return 0; }
     // 2: replace bad/uppercase chars
     if(fUpper) {
         while((c = uszOut[i])) {
@@ -826,10 +930,11 @@ DWORD CharUtil_FixFsName(_Out_writes_(2*MAX_PATH) LPSTR uszOut, _In_opt_ LPCSTR 
 * -- fUpper
 * -- return
 */
-QWORD CharUtil_Hash64U(_In_ LPCSTR usz, _In_ BOOL fUpper)
+QWORD CharUtil_Hash64U(_In_opt_ LPCSTR usz, _In_ BOOL fUpper)
 {
     CHAR c;
     QWORD i = 0, qwHash = 0;
+    if(!usz) { return 0; }
     if(fUpper) {
         while(TRUE) {
             c = usz[i++];
@@ -848,11 +953,12 @@ QWORD CharUtil_Hash64U(_In_ LPCSTR usz, _In_ BOOL fUpper)
     }
 }
 
-QWORD CharUtil_Hash64A(_In_ LPCSTR sz, _In_ BOOL fUpper)
+QWORD CharUtil_Hash64A(_In_opt_ LPCSTR sz, _In_ BOOL fUpper)
 {
     LPSTR usz;
     QWORD qwHash = 0;
     BYTE pbBuffer[MAX_PATH];
+    if(!sz) { return 0; }
     if(CharUtil_IsAnsiA(sz)) {
         return CharUtil_Hash64U(sz, fUpper);
     }
@@ -863,13 +969,14 @@ QWORD CharUtil_Hash64A(_In_ LPCSTR sz, _In_ BOOL fUpper)
     return qwHash;
 }
 
-QWORD CharUtil_Hash64W(_In_ LPCWSTR wsz, _In_ BOOL fUpper)
+QWORD CharUtil_Hash64W(_In_opt_ LPCWSTR wsz, _In_ BOOL fUpper)
 {
     CHAR c;
     LPSTR usz;
     QWORD i = 0, qwHash = 0;
     BYTE pbBuffer[MAX_PATH];
     PUSHORT pus = (PUSHORT)wsz;
+    if(!wsz) { return 0; }
     if(CharUtil_IsAnsiW(wsz)) {
         while(TRUE) {
             c = (CHAR)pus[i++];
@@ -887,10 +994,11 @@ QWORD CharUtil_Hash64W(_In_ LPCWSTR wsz, _In_ BOOL fUpper)
     return qwHash;
 }
 
-DWORD CharUtil_Hash32U(_In_ LPCSTR usz, _In_ BOOL fUpper)
+DWORD CharUtil_Hash32U(_In_opt_ LPCSTR usz, _In_ BOOL fUpper)
 {
     CHAR c;
     DWORD i = 0, dwHash = 0;
+    if(!usz) { return 0; }
     if(fUpper) {
         while(TRUE) {
             c = usz[i++];
@@ -909,11 +1017,12 @@ DWORD CharUtil_Hash32U(_In_ LPCSTR usz, _In_ BOOL fUpper)
     }
 }
 
-DWORD CharUtil_Hash32A(_In_ LPCSTR sz, _In_ BOOL fUpper)
+DWORD CharUtil_Hash32A(_In_opt_ LPCSTR sz, _In_ BOOL fUpper)
 {
     LPSTR usz;
     DWORD dwHash = 0;
     BYTE pbBuffer[MAX_PATH];
+    if(!sz) { return 0; }
     if(CharUtil_IsAnsiA(sz)) {
         return CharUtil_Hash32U(sz, fUpper);
     }
@@ -924,13 +1033,14 @@ DWORD CharUtil_Hash32A(_In_ LPCSTR sz, _In_ BOOL fUpper)
     return dwHash;
 }
 
-DWORD CharUtil_Hash32W(_In_ LPCWSTR wsz, _In_ BOOL fUpper)
+DWORD CharUtil_Hash32W(_In_opt_ LPCWSTR wsz, _In_ BOOL fUpper)
 {
     CHAR c;
     LPSTR usz;
     DWORD i = 0, dwHash = 0;
     BYTE pbBuffer[MAX_PATH];
     PUSHORT pus = (PUSHORT)wsz;
+    if(!wsz) { return 0; }
     if(CharUtil_IsAnsiW(wsz)) {
         while(TRUE) {
             c = (CHAR)pus[i++];
@@ -974,21 +1084,21 @@ DWORD CharUtil_Internal_HashFs(_In_ LPSTR usz)
 DWORD CharUtil_HashNameFsU(_In_ LPCSTR usz, _In_opt_ DWORD iSuffix)
 {
     CHAR uszFs[2*MAX_PATH];
-    if(!CharUtil_FixFsName(uszFs, usz, NULL, NULL, -1, iSuffix, TRUE)) { return 0; }
+    if(!CharUtil_FixFsName(uszFs, sizeof(uszFs), usz, NULL, NULL, -1, iSuffix, TRUE)) { return 0; }
     return CharUtil_Internal_HashFs(uszFs);
 }
 
 DWORD CharUtil_HashNameFsA(_In_ LPCSTR sz, _In_opt_ DWORD iSuffix)
 {
     CHAR uszFs[2 * MAX_PATH];
-    if(!CharUtil_FixFsName(uszFs, NULL, sz, NULL, -1, iSuffix, TRUE)) { return 0; }
+    if(!CharUtil_FixFsName(uszFs, sizeof(uszFs), NULL, sz, NULL, -1, iSuffix, TRUE)) { return 0; }
     return CharUtil_Internal_HashFs(uszFs);
 }
 
 DWORD CharUtil_HashNameFsW(_In_ LPCWSTR wsz, _In_opt_ DWORD iSuffix)
 {
     CHAR uszFs[2 * MAX_PATH];
-    if(!CharUtil_FixFsName(uszFs, NULL, NULL, wsz, -1, iSuffix, TRUE)) { return 0; }
+    if(!CharUtil_FixFsName(uszFs, sizeof(uszFs), NULL, NULL, wsz, -1, iSuffix, TRUE)) { return 0; }
     return CharUtil_Internal_HashFs(uszFs);
 }
 
@@ -1171,6 +1281,23 @@ BOOL CharUtil_StrEndsWith(_In_opt_ LPSTR usz, _In_opt_ LPSTR uszEndsWith, _In_ B
     return fCaseInsensitive ?
         (0 == _stricmp(usz + cch - cchEndsWith, uszEndsWith)) :
         (0 == strcmp(usz + cch - cchEndsWith, uszEndsWith));
+}
+
+/*
+* Checks if a string starts with a certain substring.
+* -- usz
+* -- uszStartsWith
+* -- fCaseInsensitive
+* -- return
+*/
+BOOL CharUtil_StrStartsWith(_In_opt_ LPSTR usz, _In_opt_ LPSTR uszStartsWith, _In_ BOOL fCaseInsensitive)
+{
+    if(!usz || !uszStartsWith) { return FALSE; }
+    if(fCaseInsensitive) {
+        return (0 == _strnicmp(usz, uszStartsWith, strlen(uszStartsWith)));
+    } else {
+        return (0 == strncmp(usz, uszStartsWith, strlen(uszStartsWith)));
+    }
 }
 
 /*

@@ -13,7 +13,7 @@ VmmPycProcessMaps_pte(PyObj_ProcessMaps *self, PyObject *args)
 {
     PyObject *pyList, *pyDict;
     BOOL result, fIdentifyModules;
-    DWORD i, cbPteMap = 0;
+    DWORD i;
     PVMMDLL_MAP_PTEENTRY pe;
     PVMMDLL_MAP_PTE pPteMap = NULL;
     CHAR sz[5];
@@ -23,15 +23,11 @@ VmmPycProcessMaps_pte(PyObj_ProcessMaps *self, PyObject *args)
     }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetPteU(self->dwPID, NULL, &cbPteMap, fIdentifyModules) &&
-        cbPteMap &&
-        (pPteMap = LocalAlloc(0, cbPteMap)) &&
-        VMMDLL_Map_GetPteU(self->dwPID, pPteMap, &cbPteMap, fIdentifyModules);
+    result = VMMDLL_Map_GetPteU(self->pyVMM->hVMM, self->dwPID, fIdentifyModules, &pPteMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pPteMap->dwVersion != VMMDLL_MAP_PTE_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pPteMap);
+        VMMDLL_MemFree(pPteMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.pte(): Failed.");
     }
     for(i = 0; i < pPteMap->cMap; i++) {
@@ -53,7 +49,7 @@ VmmPycProcessMaps_pte(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pPteMap);
+    VMMDLL_MemFree(pPteMap);
     return pyList;
 }
 
@@ -95,7 +91,7 @@ VmmPycProcessMaps_vad(PyObj_ProcessMaps *self, PyObject *args)
 {
     PyObject *pyList, *pyDict;
     BOOL result, fIdentifyModules = FALSE;
-    DWORD i, cbVadMap = 0;
+    DWORD i;
     PVMMDLL_MAP_VADENTRY pe;
     PVMMDLL_MAP_VAD pVadMap = NULL;
     CHAR szVadProtection[7] = { 0 };
@@ -105,15 +101,11 @@ VmmPycProcessMaps_vad(PyObj_ProcessMaps *self, PyObject *args)
     }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetVadU(self->dwPID, NULL, &cbVadMap, fIdentifyModules) &&
-        cbVadMap &&
-        (pVadMap = LocalAlloc(0, cbVadMap)) &&
-        VMMDLL_Map_GetVadU(self->dwPID, pVadMap, &cbVadMap, fIdentifyModules);
+    result = VMMDLL_Map_GetVadU(self->pyVMM->hVMM, self->dwPID, fIdentifyModules, &pVadMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pVadMap->dwVersion != VMMDLL_MAP_VAD_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pVadMap);
+        VMMDLL_MemFree(pVadMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.vad(): Failed.");
     }
     for(i = 0; i < pVadMap->cMap; i++) {
@@ -135,7 +127,7 @@ VmmPycProcessMaps_vad(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pVadMap);
+    VMMDLL_MemFree(pVadMap);
     return pyList;
 }
 
@@ -159,7 +151,6 @@ VmmPycProcessMaps_vad_ex(PyObj_ProcessMaps *self, PyObject *args)
     PyObject *pyList, *pyDict;
     BOOL result;
     DWORD oPage, cPage, i;
-    DWORD cbVadExMap = 0;
     PVMMDLL_MAP_VADEXENTRY pe;
     PVMMDLL_MAP_VADEX pVadExMap = NULL;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.vad_ex(): Not initialized."); }
@@ -169,14 +160,11 @@ VmmPycProcessMaps_vad_ex(PyObj_ProcessMaps *self, PyObject *args)
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
     result =
-        VMMDLL_Map_GetVadEx(self->dwPID, NULL, &cbVadExMap, oPage, cPage) &&
-        cbVadExMap &&
-        (pVadExMap = LocalAlloc(0, cbVadExMap)) &&
-        VMMDLL_Map_GetVadEx(self->dwPID, pVadExMap, &cbVadExMap, oPage, cPage);
+        VMMDLL_Map_GetVadEx(self->pyVMM->hVMM, self->dwPID, oPage, cPage, &pVadExMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pVadExMap->dwVersion != VMMDLL_MAP_VADEX_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pVadExMap);
+        VMMDLL_MemFree(pVadExMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.vad_ex(): Failed.");
     }
     for(i = 0; i < pVadExMap->cMap; i++) {
@@ -194,7 +182,7 @@ VmmPycProcessMaps_vad_ex(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pVadExMap);
+    VMMDLL_MemFree(pVadExMap);
     return pyList;
 }
 
@@ -204,22 +192,17 @@ VmmPycProcessMaps_unloaded_module(PyObj_ProcessMaps *self, PyObject *args)
 {
     PyObject *pyList, *pyDict;
     BOOL result;
-    DWORD cbUnloadedMap = 0;
     ULONG64 i;
     PVMMDLL_MAP_UNLOADEDMODULE pUnloadedMap = NULL;
     PVMMDLL_MAP_UNLOADEDMODULEENTRY pe;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.unloaded_module(): Not initialized."); }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetUnloadedModuleU(self->dwPID, NULL, &cbUnloadedMap) &&
-        cbUnloadedMap &&
-        (pUnloadedMap = LocalAlloc(0, cbUnloadedMap)) &&
-        VMMDLL_Map_GetUnloadedModuleU(self->dwPID, pUnloadedMap, &cbUnloadedMap);
+    result = VMMDLL_Map_GetUnloadedModuleU(self->pyVMM->hVMM, self->dwPID, &pUnloadedMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pUnloadedMap->dwVersion != VMMDLL_MAP_UNLOADEDMODULE_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pUnloadedMap);
+        VMMDLL_MemFree(pUnloadedMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.unloaded_module(): Failed.");
     }
     for(i = 0; i < pUnloadedMap->cMap; i++) {
@@ -235,46 +218,91 @@ VmmPycProcessMaps_unloaded_module(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pUnloadedMap);
+    VMMDLL_MemFree(pUnloadedMap);
     return pyList;
 }
 
-// () -> [{...}]
+// () -> {'heap': {...}, 'segment': [...]}
 static PyObject*
 VmmPycProcessMaps_heap(PyObj_ProcessMaps *self, PyObject *args)
 {
-    PyObject *pyList, *pyDict;
+    PyObject *pyDictResult, *pyDictHeap, *pyListSegment, *pyDict;
     BOOL result;
-    DWORD i, cbHeapMap = 0;
-    PVMMDLL_MAP_HEAPENTRY pe;
+    DWORD i;
+    PVMMDLL_MAP_HEAPENTRY peH;
+    PVMMDLL_MAP_HEAP_SEGMENTENTRY peS;
     PVMMDLL_MAP_HEAP pHeapMap = NULL;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.heap(): Not initialized."); }
-    if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
+    if(!(pyListSegment = PyList_New(0))) { return PyErr_NoMemory(); }
+    if(!(pyDictHeap = PyDict_New())) { return PyErr_NoMemory(); }
+    if(!(pyDictResult = PyDict_New())) { return PyErr_NoMemory(); }
+    PyDict_SetItemString_DECREF(pyDictResult, "heap", pyDictHeap);
+    PyDict_SetItemString_DECREF(pyDictResult, "segment", pyListSegment);
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetHeap(self->dwPID, NULL, &cbHeapMap) &&
-        cbHeapMap &&
-        (pHeapMap = LocalAlloc(0, cbHeapMap)) &&
-        VMMDLL_Map_GetHeap(self->dwPID, pHeapMap, &cbHeapMap);
+    result = VMMDLL_Map_GetHeap(self->pyVMM->hVMM, self->dwPID, &pHeapMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pHeapMap->dwVersion != VMMDLL_MAP_HEAP_VERSION)) {
-        Py_DECREF(pyList);
-        LocalFree(pHeapMap);
+        Py_DECREF(pyDictResult);
+        VMMDLL_MemFree(pHeapMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.heap(): Failed.");
     }
     for(i = 0; i < pHeapMap->cMap; i++) {
         if((pyDict = PyDict_New())) {
-            pe = pHeapMap->pMap + i;
-            PyDict_SetItemString_DECREF(pyDict, "va", PyLong_FromUnsignedLongLong(pe->vaHeapSegment));
-            PyDict_SetItemString_DECREF(pyDict, "size", PyLong_FromUnsignedLong(pe->cPages << 12));
-            PyDict_SetItemString_DECREF(pyDict, "size-uncommitted", PyLong_FromUnsignedLong(pe->cPagesUnCommitted << 12));
-            PyDict_SetItemString_DECREF(pyDict, "id", PyLong_FromUnsignedLong(pe->HeapId));
-            PyDict_SetItemString_DECREF(pyDict, "primary", PyBool_FromLong((long)pe->fPrimary));
-            PyList_Append_DECREF(pyList, pyDict);
+            peH = pHeapMap->pMap + i;
+            PyDict_SetItemString_DECREF(pyDict, "va", PyLong_FromUnsignedLongLong(peH->va));
+            PyDict_SetItemString_DECREF(pyDict, "tp", PyLong_FromUnsignedLong(peH->tp));
+            PyDict_SetItemString_DECREF(pyDict, "heapid", PyLong_FromUnsignedLong(peH->iHeap));
+            PyDict_SetItemDWORD_DECREF(pyDictHeap, peH->iHeap, pyDict);
         }
     }
-    LocalFree(pHeapMap);
-    return pyList;
+    for(i = 0; i < pHeapMap->cSegments; i++) {
+        if((pyDict = PyDict_New())) {
+            peS = pHeapMap->pSegments + i;
+            PyDict_SetItemString_DECREF(pyDict, "va", PyLong_FromUnsignedLongLong(peS->va));
+            PyDict_SetItemString_DECREF(pyDict, "tp", PyLong_FromUnsignedLong(peS->tp));
+            PyDict_SetItemString_DECREF(pyDict, "heapid", PyLong_FromUnsignedLong(peS->iHeap));
+            PyDict_SetItemString_DECREF(pyDict, "size", PyLong_FromUnsignedLong(peS->cb));
+            PyList_Append_DECREF(pyListSegment, pyDict);
+        }
+    }
+    VMMDLL_MemFree(pHeapMap);
+    return pyDictResult;
+}
+
+// (QWORD) -> [...]
+static PyObject*
+VmmPycProcessMaps_heapalloc(PyObj_ProcessMaps *self, PyObject *args)
+{
+    PyObject *pyListResult, *pyDict;
+    BOOL result;
+    DWORD i;
+    QWORD vaHeap;
+    PVMMDLL_MAP_HEAPALLOCENTRY peA;
+    PVMMDLL_MAP_HEAPALLOC pHeapAllocMap = NULL;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.heapalloc(): Not initialized."); }
+    if(!PyArg_ParseTuple(args, "K", &vaHeap)) {
+        return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.heapalloc(): Illegal argument.");
+    }
+    if(!(pyListResult = PyList_New(0))) { return PyErr_NoMemory(); }
+    Py_BEGIN_ALLOW_THREADS;
+    result = VMMDLL_Map_GetHeapAlloc(self->pyVMM->hVMM, self->dwPID, vaHeap, &pHeapAllocMap);
+    Py_END_ALLOW_THREADS;
+    if(!result || (pHeapAllocMap->dwVersion != VMMDLL_MAP_HEAPALLOC_VERSION)) {
+        Py_DECREF(pyListResult);
+        VMMDLL_MemFree(pHeapAllocMap);
+        return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.heapalloc(): Failed.");
+    }
+    for(i = 0; i < pHeapAllocMap->cMap; i++) {
+        if((pyDict = PyDict_New())) {
+            peA = pHeapAllocMap->pMap + i;
+            PyDict_SetItemString_DECREF(pyDict, "va", PyLong_FromUnsignedLongLong(peA->va));
+            PyDict_SetItemString_DECREF(pyDict, "tp", PyLong_FromUnsignedLong(peA->tp));
+            PyDict_SetItemString_DECREF(pyDict, "size", PyLong_FromUnsignedLong(peA->cb));
+            PyList_Append_DECREF(pyListResult, pyDict);
+        }
+    }
+    VMMDLL_MemFree(pHeapAllocMap);
+    return pyListResult;
 }
 
 // () -> [{...}]
@@ -284,22 +312,17 @@ VmmPycProcessMaps_thread(PyObj_ProcessMaps *self, PyObject *args)
     PyObject *pyList, *pyDict;
     BOOL result;
     DWORD i;
-    DWORD cbThreadMap = 0;
     PVMMDLL_MAP_THREADENTRY pe;
     PVMMDLL_MAP_THREAD pThreadMap = NULL;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.thread(): Not initialized."); }
     CHAR szTimeUTC[MAX_PATH];
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetThread(self->dwPID, NULL, &cbThreadMap) &&
-        cbThreadMap &&
-        (pThreadMap = LocalAlloc(0, cbThreadMap)) &&
-        VMMDLL_Map_GetThread(self->dwPID, pThreadMap, &cbThreadMap);
+    result = VMMDLL_Map_GetThread(self->pyVMM->hVMM, self->dwPID, &pThreadMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pThreadMap->dwVersion != VMMDLL_MAP_THREAD_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pThreadMap);
+        VMMDLL_MemFree(pThreadMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.thread(): Failed.");
     }
     for(i = 0; i < pThreadMap->cMap; i++) {
@@ -312,6 +335,7 @@ VmmPycProcessMaps_thread(PyObj_ProcessMaps *self, PyObject *args)
             PyDict_SetItemString_DECREF(pyDict, "running", PyLong_FromUnsignedLong(pe->bRunning));
             PyDict_SetItemString_DECREF(pyDict, "priority", PyLong_FromUnsignedLong(pe->bPriority));
             PyDict_SetItemString_DECREF(pyDict, "basepriority", PyLong_FromUnsignedLong(pe->bBasePriority));
+            PyDict_SetItemString_DECREF(pyDict, "waitreason", PyLong_FromUnsignedLong(pe->bWaitReason));
             PyDict_SetItemString_DECREF(pyDict, "va-ethread", PyLong_FromUnsignedLongLong(pe->vaETHREAD));
             PyDict_SetItemString_DECREF(pyDict, "va-teb", PyLong_FromUnsignedLongLong(pe->vaTeb));
             PyDict_SetItemString_DECREF(pyDict, "va-start", PyLong_FromUnsignedLongLong(pe->vaStartAddress));
@@ -331,7 +355,7 @@ VmmPycProcessMaps_thread(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pThreadMap);
+    VMMDLL_MemFree(pThreadMap);
     return pyList;
 }
 
@@ -341,22 +365,17 @@ VmmPycProcessMaps_handle(PyObj_ProcessMaps *self, PyObject *args)
 {
     PyObject *pyList, *pyDict;
     BOOL result;
-    DWORD cbHandleMap = 0;
     ULONG64 i;
     PVMMDLL_MAP_HANDLE pHandleMap = NULL;
     PVMMDLL_MAP_HANDLEENTRY pe;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.handle(): Not initialized."); }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    result =
-        VMMDLL_Map_GetHandleU(self->dwPID, NULL, &cbHandleMap) &&
-        cbHandleMap &&
-        (pHandleMap = LocalAlloc(0, cbHandleMap)) &&
-        VMMDLL_Map_GetHandleU(self->dwPID, pHandleMap, &cbHandleMap);
+    result = VMMDLL_Map_GetHandleU(self->pyVMM->hVMM, self->dwPID, &pHandleMap);
     Py_END_ALLOW_THREADS;
     if(!result || (pHandleMap->dwVersion != VMMDLL_MAP_HANDLE_VERSION)) {
         Py_DECREF(pyList);
-        LocalFree(pHandleMap);
+        VMMDLL_MemFree(pHandleMap);
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.handle(): Failed.");
     }
     for(i = 0; i < pHandleMap->cMap; i++) {
@@ -377,7 +396,7 @@ VmmPycProcessMaps_handle(PyObj_ProcessMaps *self, PyObject *args)
             PyList_Append_DECREF(pyList, pyDict);
         }
     }
-    LocalFree(pHandleMap);
+    VMMDLL_MemFree(pHandleMap);
     return pyList;
 }
 
@@ -386,10 +405,11 @@ VmmPycProcessMaps_handle(PyObj_ProcessMaps *self, PyObject *args)
 //-----------------------------------------------------------------------------
 
 PyObj_ProcessMaps*
-VmmPycProcessMaps_InitializeInternal(_In_ DWORD dwPID)
+VmmPycProcessMaps_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_ DWORD dwPID)
 {
     PyObj_ProcessMaps *pyObj;
     if(!(pyObj = PyObject_New(PyObj_ProcessMaps, (PyTypeObject*)g_pPyType_ProcessMaps))) { return NULL; }
+    Py_INCREF(pyVMM); pyObj->pyVMM = pyVMM;
     pyObj->fValid = TRUE;
     pyObj->dwPID = dwPID;
     return pyObj;
@@ -414,6 +434,7 @@ static void
 VmmPycProcessMaps_dealloc(PyObj_ProcessMaps *self)
 {
     self->fValid = FALSE;
+    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
 }
 
 _Success_(return)
@@ -425,6 +446,7 @@ BOOL VmmPycProcessMaps_InitializeType(PyObject *pModule)
         {"vad_ex", (PyCFunction)VmmPycProcessMaps_vad_ex, METH_VARARGS, "Retrieve extended VAD map (with additional information about each page)."},
         {"unloaded_module", (PyCFunction)VmmPycProcessMaps_unloaded_module, METH_VARARGS, "Retrieve the unloaded modules."},
         {"heap", (PyCFunction)VmmPycProcessMaps_heap, METH_VARARGS, "Retrieve the heaps."},
+        {"heapalloc", (PyCFunction)VmmPycProcessMaps_heapalloc, METH_VARARGS, "Retrieve heap allocations for a specified heap."},
         {"thread", (PyCFunction)VmmPycProcessMaps_thread, METH_VARARGS, "Retrieve the threads."},
         {"handle", (PyCFunction)VmmPycProcessMaps_handle, METH_VARARGS, "Retrieve the handles."},
         {NULL, NULL, 0, NULL}

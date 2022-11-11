@@ -3,6 +3,8 @@ EXPORTS
     VMMDLL_Initialize
     VMMDLL_InitializeEx
     VMMDLL_Close
+    VMMDLL_CloseAll
+    VMMDLL_MemSize
     VMMDLL_MemFree
 
     VMMDLL_InitializePlugins
@@ -34,6 +36,7 @@ EXPORTS
     VMMDLL_MemRead
     VMMDLL_MemReadEx
     VMMDLL_MemPrefetchPages
+    VMMDLL_MemWriteScatter
     VMMDLL_MemWrite
     VMMDLL_MemVirt2Phys
     VMMDLL_MemSearch
@@ -41,6 +44,8 @@ EXPORTS
     VMMDLL_Scatter_Initialize
     VMMDLL_Scatter_Prepare
     VMMDLL_Scatter_PrepareEx
+    VMMDLL_Scatter_PrepareWrite
+    VMMDLL_Scatter_Execute
     VMMDLL_Scatter_ExecuteRead
     VMMDLL_Scatter_Read
     VMMDLL_Scatter_Clear
@@ -52,7 +57,6 @@ EXPORTS
     VMMDLL_Map_GetNetW
     VMMDLL_Map_GetPfn
     VMMDLL_Map_GetPool
-    VMMDLL_Map_GetPoolEx
     VMMDLL_Map_GetPhysMem
     VMMDLL_Map_GetUsersU
     VMMDLL_Map_GetUsersW
@@ -74,6 +78,7 @@ EXPORTS
     VMMDLL_Map_GetIATU
     VMMDLL_Map_GetIATW
     VMMDLL_Map_GetHeap
+    VMMDLL_Map_GetHeapAlloc
     VMMDLL_Map_GetThread
     VMMDLL_Map_GetHandleU
     VMMDLL_Map_GetHandleW
@@ -107,6 +112,7 @@ EXPORTS
     VMMDLL_PdbTypeSize
     VMMDLL_PdbTypeChildOffset
     
+    VMMDLL_ForensicFileAppend
     VMMDLL_UtilFillHexAscii
 
     VMMDLL_Log
