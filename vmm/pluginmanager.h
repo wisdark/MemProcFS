@@ -1,6 +1,6 @@
 // pluginmanager.h : definitions for the plugin manager for MemProcFS plugins.
 //
-// (c) Ulf Frisk, 2018-2022
+// (c) Ulf Frisk, 2018-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __PLUGINMANAGER_H__
@@ -154,5 +154,12 @@ DWORD PluginManager_FcLogCSV(_In_ VMM_HANDLE H, _In_ VMMDLL_CSV_HANDLE hCSV);
 * -- return = 0 (to make function compatible with LPTHREAD_START_ROUTINE).
 */
 DWORD PluginManager_FcLogJSON(_In_ VMM_HANDLE H, _In_ VOID(*pfnAddEntry)(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_FORENSIC_JSONDATA pData));
+
+/*
+* Execute python code in the python plugin sub-system and print it's result on-screen.
+* -- H
+* -- szPythonFileToExec
+*/
+VOID PluginManager_PythonExecFile(_In_ VMM_HANDLE H, _In_ LPSTR szPythonFileToExec);
 
 #endif /* __PLUGINMANAGER_H__ */

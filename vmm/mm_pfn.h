@@ -1,7 +1,7 @@
 // mm_pfn.h : definitions related to the pfn (page frame number) database and
 //            related physical memory functionality.
 //
-// (c) Ulf Frisk, 2020-2022
+// (c) Ulf Frisk, 2020-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __MM_PFN_H__
@@ -83,11 +83,12 @@ typedef struct tdMMPFNOB_MAP {
 } MMPFNOB_MAP, *PMMPFNOB_MAP;
 
 /*
-* Initialize the PFN (page frame number) subsystem.
+* Close / Shutdown the PFN subsystem. This function should never be called when
+* there may be an active thread in the PFN subsystem. This function should only
+* be called on shutdown.
 * -- H
-* -- pSystemProcess
 */
-VOID MmPfn_Initialize(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProcess);
+VOID MmPfn_Close(_In_ VMM_HANDLE H);
 
 /*
 * Refresh the PFN (page frame number) subsystem.

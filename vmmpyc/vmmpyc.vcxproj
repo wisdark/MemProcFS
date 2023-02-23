@@ -236,11 +236,15 @@
     <ClCompile Include="vmmpyc_scattermemory.c" />
     <ClCompile Include="vmmpyc_util.c" />
     <ClCompile Include="vmmpyc_vfs.c" />
+    <ClCompile Include="vmmpyc_virtualmachine.c" />
     <ClCompile Include="vmmpyc_virtualmemory.c" />
     <ClCompile Include="vmmpyc_vmm.c" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="vmmpyc.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,7 +1,7 @@
 // memprocfs_dokan.c : implementation of core functionality for the Memory Process File System
 // This is just a thin loader for the virtual memory manager dll which contains the logic.
 //
-// (c) Ulf Frisk, 2018-2022
+// (c) Ulf Frisk, 2018-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifdef _WIN32
@@ -364,7 +364,7 @@ VOID VfsDokan_Close(_In_ CHAR chMountPoint)
     if(ctxVfs && ctxVfs->fInitialized) {
         ctxVfs->fInitialized = FALSE;
         if(wchMountPoint) {
-            hModuleDokan = LoadLibraryExA("dokan1.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            hModuleDokan = LoadLibraryExA("dokan2.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
             if(hModuleDokan) {
                 pfnDokanUnmount = (BOOL(WINAPI *)(WCHAR))GetProcAddress(hModuleDokan, "DokanUnmount");
                 if(pfnDokanUnmount) {
@@ -483,7 +483,7 @@ VOID VfsDokan_InitializeAndMount(_In_ CHAR chMountPoint)
     pfnDokanShutdown();
     if(status == -5) {
         printf("MOUNT: Failed: drive busy/already mounted.\n");
-    } else {
+    } else if(status) {
         printf("MOUNT: Failed. Status Code: %i\n", status);
     }
 fail:
@@ -501,20 +501,28 @@ fail:
 
 
 /*
-* Retrieve the mount point from the command line arguments. If no '-mount'
-* command line argument is given the default mount point will be: M:
+* Retrieve the mount point from the command line arguments.
+* If no '-mount' command line argument is given the default mount point will be M:
+* _EXCEPT_ if '-pythonexec' is also given in which case '\0' will be returned.
 * -- argc
 * -- argv
+* -- pfMountSpecified
+* -- pfPythonExec
 * -- return = the mount point as a drive letter.
 */
-CHAR GetMountPoint(_In_ DWORD argc, _In_ char* argv[])
+CHAR GetMountPoint(_In_ DWORD argc, _In_ char* argv[], _Out_ PBOOL pfMountSpecified, _Out_ PBOOL pfPythonExec)
 {
     CHAR chMountPoint = 'M';
     DWORD i = 1;
+    *pfPythonExec = FALSE;
+    *pfMountSpecified = FALSE;
     for(i = 0; i < argc - 1; i++) {
         if(0 == strcmp(argv[i], "-mount")) {
             chMountPoint = argv[i + 1][0];
-            break;
+            *pfMountSpecified = TRUE;
+        }
+        if(0 == strcmp(argv[i], "-pythonexec")) {
+            *pfPythonExec = TRUE;
         }
     }
     if(chMountPoint >= 'a' && chMountPoint <= 'z') {
@@ -540,7 +548,7 @@ DWORD WINAPI MemProcFsCtrlHandler_TryShutdownThread(PVOID pv)
             LcClose(g_hLC_RemoteFS);
             g_hLC_RemoteFS = NULL;
         } else {
-            VMMDLL_Close(g_hVMM);
+            VMMDLL_CloseAll();
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) { ; }
     return 1;
@@ -563,6 +571,13 @@ BOOL WINAPI MemProcFsCtrlHandler(DWORD fdwCtrlType)
         TerminateProcess(GetCurrentProcess(), 1);
         Sleep(1000);
         ExitProcess(1);
+        return TRUE;
+    }
+    if(fdwCtrlType == CTRL_BREAK_EVENT) {
+        printf("CTRL+BREAK detected - refresh initiated ...\n");
+        VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_REFRESH_ALL, 1);
+        VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_CONFIG_DEBUG, 1);
+        printf("CTRL+BREAK finished ...\n");
         return TRUE;
     }
     return FALSE;
@@ -626,15 +641,18 @@ int main(_In_ int argc, _In_ char* argv[])
 {
     // MAIN FUNCTION PROPER BELOW:
     BOOL result, fRemoteFS = FALSE;
+    BOOL fMountSpecified, fPythonExec;
     int i;
     HANDLE hLC_RemoteFS = 0;
     LPSTR *szArgs = NULL;
     LC_CMD_AGENT_VFS_REQ Req = { 0 };
     g_hLC_RemoteFS = 0;
-    g_VfsMountPoint = GetMountPoint(argc, argv);
+    g_VfsMountPoint = GetMountPoint(argc, argv, &fMountSpecified, &fPythonExec);
     if(g_VfsMountPoint < 'A' || g_VfsMountPoint > 'Z') {
-        printf("MemProcFS: Invalid -mount specified (only A-Z allowed).\n");
-        return 1;
+        if(!fPythonExec || fMountSpecified) {
+            printf("MemProcFS: Invalid -mount specified (only A-Z allowed).\n");
+            return 1;
+        }
     }
     LoadLibraryA("leechcore.dll");
     if(!(szArgs = LocalAlloc(LMEM_ZEROINIT, (argc + 1ULL) * sizeof(LPSTR)))) {
@@ -645,10 +663,16 @@ int main(_In_ int argc, _In_ char* argv[])
         szArgs[i] = argv[i];
         if(!_stricmp(argv[i], "-remotefs")) { fRemoteFS = TRUE; }
     }
+    SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
     if(fRemoteFS) {
         if(!MemProcFS_InitializeRemoteFS(argc, argv)) {
             // error message already given by MemProcFS_InitializeRemoteFS()
             return 1;
+        }
+        if(fPythonExec && !fMountSpecified) {
+            LcClose(g_hLC_RemoteFS);
+            g_hLC_RemoteFS = NULL;
+            return 0;
         }
     } else {
         szArgs[0] = "-printf";
@@ -660,6 +684,10 @@ int main(_In_ int argc, _In_ char* argv[])
             // any error message will already be shown by the InitializeReserved function.
             return 1;
         }
+        if(fPythonExec && !fMountSpecified) {
+            VMMDLL_CloseAll();
+            return 0;
+        }
         VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_CONFIG_STATISTICS_FUNCTIONCALL, 1);
         result = VMMDLL_InitializePlugins(g_hVMM);
         if(!result) {
@@ -667,8 +695,8 @@ int main(_In_ int argc, _In_ char* argv[])
             return 1;
         }
     }
-    VfsList_Initialize(MemProcFS_VfsListU, 500, 128, FALSE);
     SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
+    VfsList_Initialize(MemProcFS_VfsListU, 500, 128, FALSE);
     VfsDokan_InitializeAndMount(g_VfsMountPoint);
     if(g_hLC_RemoteFS) {
         LcClose(g_hLC_RemoteFS);

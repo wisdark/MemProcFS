@@ -1,6 +1,6 @@
-// vmmpyc_physicalmemory.c : implementation or physical memory for vmmpyc.
+// vmmpyc_physicalmemory.c : implementation of physical memory for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -40,7 +40,7 @@ VmmPycPhysicalMemory_scatter_initialize(PyObj_PhysicalMemory *self, PyObject *ar
     if(!PyArg_ParseTuple(args, "|k", &dwReadFlags)) { // borrowed reference
         return PyErr_Format(PyExc_RuntimeError, "PhysicalMemory.scatter_initialize(): Illegal argument.");
     }
-    return (PyObject*)VmmPycScatterMemory_InitializeInternal(self->pyVMM, (DWORD)-1, dwReadFlags);
+    return (PyObject*)VmmPycScatterMemory_InitializeInternal(self->pyVMM, NULL, (DWORD)-1, dwReadFlags);
 }
 
 //-----------------------------------------------------------------------------

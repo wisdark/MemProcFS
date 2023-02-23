@@ -1,6 +1,6 @@
 // charutil.c : implementation of various character/string utility functions.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "charutil.h"
@@ -34,6 +34,19 @@ BOOL CharUtil_IsAnsiW(_In_ LPCWSTR wsz)
         c = wsz[i++];
         if(c == 0) { return TRUE; }
         if(c > 127) { return FALSE; }
+    }
+}
+
+BOOL CharUtil_IsAnsiFsA(_In_ LPCSTR sz)
+{
+    UCHAR c;
+    DWORD i = 0;
+    while(TRUE) {
+        c = sz[i++];
+        if(c == 0) { return TRUE; }
+        if(c > 127) { return FALSE; }
+        if(CHARUTIL_ANSIFILENAME_ALLOW[c] == '0') { return FALSE; }
+        if(i > MAX_PATH - 2) { return FALSE; }
     }
 }
 
@@ -1265,6 +1278,60 @@ QWORD CharUtil_HashPathFsW(_In_ LPCWSTR wszPath)
 }
 
 /*
+* Compare multiple strings with a CharUtil_Str* compare function.
+* If at least one comparison is TRUE return TRUE - otherwise FALSE.
+* -- pfnStrCmp
+* -- usz1
+* -- fCaseInsensitive
+* -- cStr
+* -- 
+* ...
+* -- return
+*/
+BOOL CharUtil_StrCmpAny(_In_opt_ CHARUTIL_STRCMP_PFN pfnStrCmp, _In_opt_ LPSTR usz1, _In_ BOOL fCaseInsensitive, _In_ DWORD cStr, ...)
+{
+    va_list arglist;
+    if(!pfnStrCmp) { return FALSE; }
+    va_start(arglist, cStr);
+    while(cStr) {
+        if(pfnStrCmp(usz1, va_arg(arglist, LPSTR), fCaseInsensitive)) {
+            va_end(arglist);
+            return TRUE;
+        }
+        cStr--;
+    }
+    va_end(arglist);
+    return FALSE;
+}
+
+/*
+* Compare multiple strings with a CharUtil_Str* compare function.
+* If all comparisons are TRUE return TRUE - otherwise FALSE.
+* -- pfnStrCmp
+* -- usz1
+* -- fCaseInsensitive
+* -- cStr
+* --
+* ...
+* -- return
+*/
+BOOL CharUtil_StrCmpAll(_In_opt_ CHARUTIL_STRCMP_PFN pfnStrCmp, _In_opt_ LPSTR usz1, _In_ BOOL fCaseInsensitive, _In_ DWORD cStr, ...)
+{
+    va_list arglist;
+    if(!pfnStrCmp) { return FALSE; }
+    va_start(arglist, cStr);
+    while(cStr) {
+        if(!pfnStrCmp(usz1, va_arg(arglist, LPSTR), fCaseInsensitive)) {
+            va_end(arglist);
+            return FALSE;
+        }
+        cStr--;
+    }
+    va_end(arglist);
+    return TRUE;
+}
+
+/*
 * Checks if a string ends with a certain substring.
 * -- usz
 * -- uszEndsWith
@@ -1299,6 +1366,25 @@ BOOL CharUtil_StrStartsWith(_In_opt_ LPSTR usz, _In_opt_ LPSTR uszStartsWith, _I
         return (0 == strncmp(usz, uszStartsWith, strlen(uszStartsWith)));
     }
 }
+
+/*
+* Checks if a string equals another string.
+* -- usz1
+* -- usz2
+* -- fCaseInsensitive
+* -- return
+*/
+BOOL CharUtil_StrEquals(_In_opt_ LPSTR usz, _In_opt_ LPSTR usz2, _In_ BOOL fCaseInsensitive)
+{
+    if(!usz || !usz2) { return FALSE; }
+    if(fCaseInsensitive) {
+        return (0 == _stricmp(usz, usz2));
+    } else {
+        return (0 == strcmp(usz, usz2));
+    }
+}
+
+
 
 /*
 * Compare a wide-char string to a utf-8 string.

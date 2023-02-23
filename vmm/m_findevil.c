@@ -1,6 +1,6 @@
 // m_findevil.c : implementation of the find evil built-in module.
 //
-// (c) Ulf Frisk, 2020-2022
+// (c) Ulf Frisk, 2020-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "pluginmanager.h"
@@ -18,29 +18,9 @@ LPCSTR szM_FINDEVIL_README =
 "Find Evil currently detect some types of malware infection by memory analysis\n" \
 "and does not, at this moment, support anti-virus scans and custom yara rules.\n" \
 "---                                                                          \n" \
-"Find Evil is enabled for 64-bit Windows 10 to keep false positive ratio low. \n" \
+"Find Evil is enabled for 64-bit Windows 10+ to keep false positive ratio low.\n" \
 "Find Evil limit select findings per virtual address decriptor and process to \n" \
 "keep output manageable. Find Evil also limit findings on select processes.   \n" \
-"---                                                                          \n" \
-"Find Evil is currently able to detect:                                       \n" \
-"- Injected PE:    Non-loader loaded .dll with intact PE header.              \n" \
-"                  Low false positive ratio.                                  \n" \
-"- PROC NoLink:    Processes not linked by the _EPROCESS linked list.         \n" \
-"- PROC Parent:    Suspicious non-standard parent process.                    \n" \
-"- PROC User:      Suspicious non-standard user.                              \n" \
-"- Bad PEB/LDR:    No ordinary modules located in the PEB/LDR_DATA structures \n" \
-"                  indicates corruption; due to malware or paged out memory.  \n" \
-"- PEB Masquerade: PEB user-mode image path differs from kernel image path.   \n" \
-"- No-Link PE:     Loader loaded .dll with intact PE header not in PEB.       \n" \
-"                  May provide false positives on paged memory/corrupted PEB. \n" \
-"- Patched PE:     Loader loaded .dll - but modified after load time.         \n" \
-"                  High false positives on relocations on 32-bit binaries.    \n" \
-"- Private RX/RWX: Executable pages in non-shared memory such as stacks and   \n" \
-"                  heaps. May provide false positives on Just-In-Time (JIT)   \n" \
-"                  compiled code and should be used as an indicator only.     \n" \
-"- NoImage RX/RWX: Executable pages in shared memory other than loader-loaded \n" \
-"                  .dll memory such file backed memory. May provide false     \n" \
-"                  positives and should be used as an indicator only.         \n" \
 "---                                                                          \n" \
 "Documentation:    https://github.com/ufrisk/MemProcFS/wiki/FS_FindEvil       \n" \
 "---                                                                          \n" \
@@ -49,10 +29,12 @@ LPCSTR szM_FINDEVIL_README =
 VOID MFindEvil_Read_FindEvil_LnTpModule(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_EVILENTRY peEvil, _In_ WORD iLine, _Inout_updates_(MFINDEVIL_LINELENGTH_X64) LPSTR usz)
 {
     DWORD i;
-    PVMMOB_MAP_MODULE pObModuleMap = NULL;
     LPSTR uszModuleName = NULL;
+    PVMM_MAP_VADENTRY peVad = NULL;
+    PVMMOB_MAP_VAD pObVadMap = NULL;
+    PVMMOB_MAP_MODULE pObModuleMap = NULL;
     if(!pProcess) { return; }
-    if(VmmMap_GetModule(H, pProcess, &pObModuleMap)) {
+    if(VmmMap_GetModule(H, pProcess, 0, &pObModuleMap)) {
         for(i = 0; i < pObModuleMap->cMap; i++) {
             if(pObModuleMap->pMap[i].vaBase == peEvil->va) {
                 uszModuleName = pObModuleMap->pMap[i].uszFullName;
@@ -60,8 +42,15 @@ VOID MFindEvil_Read_FindEvil_LnTpModule(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS
             }
         }
     }
-    strncat_s(usz, MFINDEVIL_LINELENGTH_X64, uszModuleName ? uszModuleName : "", _TRUNCATE);
+    if(VmmMap_GetVad(H, pProcess, &pObVadMap, VMM_VADMAP_TP_FULL)) {
+        peVad = VmmMap_GetVadEntry(H, pObVadMap, peEvil->va);
+    }
+    _snprintf_s(usz, MFINDEVIL_LINELENGTH_X64, _TRUNCATE, "Module:[%s] VAD:[%s]",
+        uszModuleName ? uszModuleName : "",
+        (peVad && peVad->cbuText) ? peVad->uszText : ""
+    );
     Ob_DECREF(pObModuleMap);
+    Ob_DECREF(pObVadMap);
 }
 
 VOID MFindEvil_Read_FindEvil_LnTpVadEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_EVILENTRY peEvil, _In_ WORD iLine, _Inout_updates_(MFINDEVIL_LINELENGTH_X64) LPSTR usz)
@@ -130,6 +119,7 @@ VOID MFindEvil_ReadLineCB(_In_ VMM_HANDLE H, _Inout_opt_ PVOID ctx, _In_ DWORD c
         case VMM_EVIL_TP_VAD_NOIMAGE_RWX:
             MFindEvil_Read_FindEvil_LnTpVadEx(H, pObProcess, pe, (WORD)ie, uszBuffer);
             break;
+        case VMM_EVIL_TP_PROC_BAD_DTB:
         case VMM_EVIL_TP_PROC_NOLINK:
         case VMM_EVIL_TP_PROC_PARENT:
         case VMM_EVIL_TP_PROC_USER:

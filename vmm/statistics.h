@@ -1,6 +1,6 @@
 // statistics.h : definitions of statistics related functionality.
 //
-// (c) Ulf Frisk, 2016-2022
+// (c) Ulf Frisk, 2016-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __STATISTICS_H__
@@ -40,6 +40,7 @@ typedef enum tdSTATISTICS_ID {
     STATISTICS_ID_VMMDLL_PidList,
     STATISTICS_ID_VMMDLL_PidGetFromName,
     STATISTICS_ID_VMMDLL_ProcessGetInformation,
+    STATISTICS_ID_VMMDLL_ProcessGetInformationAll,
     STATISTICS_ID_VMMDLL_ProcessGetInformationString,
     STATISTICS_ID_VMMDLL_Log,
     STATISTICS_ID_VMMDLL_Map_GetPte,
@@ -58,12 +59,19 @@ typedef enum tdSTATISTICS_ID {
     STATISTICS_ID_VMMDLL_Map_GetPool,
     STATISTICS_ID_VMMDLL_Map_GetNet,
     STATISTICS_ID_VMMDLL_Map_GetUsers,
+    STATISTICS_ID_VMMDLL_Map_GetVM,
     STATISTICS_ID_VMMDLL_Map_GetServices,
     STATISTICS_ID_VMMDLL_Map_GetPfn,
     STATISTICS_ID_VMMDLL_ProcessGetDirectories,
     STATISTICS_ID_VMMDLL_ProcessGetSections,
     STATISTICS_ID_VMMDLL_ProcessGetProcAddress,
     STATISTICS_ID_VMMDLL_ProcessGetModuleBase,
+    STATISTICS_ID_VMMDLL_VmGetVmmHandle,
+    STATISTICS_ID_VMMDLL_VmMemTranslateGPA,
+    STATISTICS_ID_VMMDLL_VmMemRead,
+    STATISTICS_ID_VMMDLL_VmMemReadScatter,
+    STATISTICS_ID_VMMDLL_VmMemWrite,
+    STATISTICS_ID_VMMDLL_VmMemWriteScatter,
     STATISTICS_ID_VMMDLL_WinGetThunkIAT,
     STATISTICS_ID_VMMDLL_WinMemCompression_DecompressPage,
     STATISTICS_ID_VMMDLL_WinRegHive_List,
@@ -114,6 +122,7 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_VMMDLL_PidList]                  = "VMMDLL_PidList",
     [STATISTICS_ID_VMMDLL_PidGetFromName]           = "VMMDLL_PidGetFromName",
     [STATISTICS_ID_VMMDLL_ProcessGetInformation]    = "VMMDLL_ProcessGetInformation",
+    [STATISTICS_ID_VMMDLL_ProcessGetInformationAll] = "VMMDLL_ProcessGetInformationAll",
     [STATISTICS_ID_VMMDLL_ProcessGetInformationString] = "VMMDLL_ProcessGetInformationString",
     [STATISTICS_ID_VMMDLL_Log]                      = "VMMDLL_Log",
     [STATISTICS_ID_VMMDLL_Map_GetPte]               = "VMMDLL_Map_GetPte",
@@ -132,6 +141,7 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_VMMDLL_Map_GetPool]              = "VMMDLL_Map_GetPool",
     [STATISTICS_ID_VMMDLL_Map_GetNet]               = "VMMDLL_Map_GetNet",
     [STATISTICS_ID_VMMDLL_Map_GetUsers]             = "VMMDLL_Map_GetUsers",
+    [STATISTICS_ID_VMMDLL_Map_GetVM]                = "MMDLL_Map_GetVM",
     [STATISTICS_ID_VMMDLL_Map_GetServices]          = "VMMDLL_Map_GetServices",
     [STATISTICS_ID_VMMDLL_Map_GetPfn]               = "VMMDLL_Map_GetPfn",
     [STATISTICS_ID_VMMDLL_ProcessGetDirectories]    = "VMMDLL_ProcessGetDirectories",
@@ -146,6 +156,12 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_VMMDLL_WinReg_EnumKeyExW]        = "VMMDLL_WinReg_EnumKeyExW",
     [STATISTICS_ID_VMMDLL_WinReg_EnumValueW]        = "VMMDLL_WinReg_EnumValueW",
     [STATISTICS_ID_VMMDLL_WinReg_QueryValueEx]      = "VMMDLL_WinReg_QueryValueEx",
+    [STATISTICS_ID_VMMDLL_VmGetVmmHandle]           = "VMMDLL_VmGetVmmHandle",
+    [STATISTICS_ID_VMMDLL_VmMemTranslateGPA]        = "VMMDLL_VmMemTranslateGPA",
+    [STATISTICS_ID_VMMDLL_VmMemRead]                = "VMMDLL_VmMemRead",
+    [STATISTICS_ID_VMMDLL_VmMemReadScatter]         = "VMMDLL_VmMemReadScatter",
+    [STATISTICS_ID_VMMDLL_VmMemWrite]               = "VMMDLL_VmMemWrite",
+    [STATISTICS_ID_VMMDLL_VmMemWriteScatter]        = "VMMDLL_VmMemWriteScatter",
     [STATISTICS_ID_VMMDLL_PdbLoad]                  = "VMMDLL_PdbLoad",
     [STATISTICS_ID_VMMDLL_PdbSymbolName]            = "VMMDLL_PdbSymbolName",
     [STATISTICS_ID_VMMDLL_PdbSymbolAddress]         = "VMMDLL_PdbSymbolAddress",
@@ -171,5 +187,38 @@ QWORD Statistics_CallEnd(_In_ VMM_HANDLE H, _In_ DWORD fId, QWORD tmCallStart);
 */
 _Success_(return)
 BOOL Statistics_CallToString(_In_ VMM_HANDLE H, _Out_opt_ LPSTR *psz, _Out_ PDWORD pcsz);
+
+
+
+// ----------------------------------------------------------------------------
+// CALL STATISTICS DEBUG/TRACE LOGGING BELOW:
+// ----------------------------------------------------------------------------
+
+typedef struct tdVMMSTATISTICS_LOG {
+    BOOL f;
+    DWORD dwPID;
+    DWORD dwMID;
+    VMMLOG_LEVEL dwLogLevel;
+    QWORD v[3];
+} VMMSTATISTICS_LOG, *PVMMSTATISTICS_LOG;
+
+/*
+* Start a call statistics logging session.
+* -- H
+* -- dwMID = module ID (MID)
+* -- dwLogLevel = log level as defined by LOGLEVEL_*
+* -- pProcess
+* -- pLogStatistics
+* -- uszText
+*/
+VOID VmmStatisticsLogStart(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPSTR uszText);
+
+/*
+* End a statistics logging session.
+* -- H
+* -- pLogStatistics
+* -- uszText
+*/
+VOID VmmStatisticsLogEnd(_In_ VMM_HANDLE H, _In_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPSTR uszText);
 
 #endif /* __STATISTICS_H__ */

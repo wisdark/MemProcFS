@@ -1,6 +1,6 @@
 // oscompatibility.h : VMM Windows/Linux compatibility layer.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OSCOMPATIBILITY_H__
@@ -117,6 +117,7 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define _Check_return_opt_
 #define _Frees_ptr_opt_
 #define _In_
+#define _In_bytecount_(x)
 #define _In_count_(x)
 #define _In_opt_
 #define _In_opt_z_
@@ -193,12 +194,11 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define GetCurrentProcess()					((HANDLE)-1)
 #define InetNtopA                           inet_ntop
 #define closesocket(s)                      close(s)
-#define FreeLibrary(h)
-#define GetModuleHandleA(s)		            NULL
 #define HeapAlloc(hHeap, dwFlags, dwBytes)  malloc(dwBytes)
 
 HMODULE LoadLibraryA(LPSTR lpFileName);
-FARPROC GetProcAddress(HMODULE hModule, LPSTR lpProcName);
+BOOL FreeLibrary(_In_ HMODULE hLibModule);
+FARPROC GetProcAddress(_In_opt_ HMODULE hModule, _In_ LPSTR lpProcName);
 
 // SID
 _Success_(return) BOOL IsValidSid(_In_opt_ PSID pSID);
@@ -240,6 +240,8 @@ HANDLE FindFirstFileA(LPSTR lpFileName, LPWIN32_FIND_DATAA lpFindFileData);
 BOOL FindNextFileA(HANDLE hFindFile, LPWIN32_FIND_DATAA lpFindFileData);
 HANDLE LocalAlloc(DWORD uFlags, SIZE_T uBytes);
 VOID LocalFree(HANDLE hMem);
+DWORD GetModuleFileNameA(_In_opt_ HMODULE hModule, _Out_ LPSTR lpFilename, _In_ DWORD nSize);
+HMODULE GetModuleHandleA(_In_opt_ LPCSTR lpModuleName);
 QWORD GetTickCount64();
 BOOL QueryPerformanceFrequency(_Out_ LARGE_INTEGER *lpFrequency);
 BOOL QueryPerformanceCounter(_Out_ LARGE_INTEGER *lpPerformanceCount);
@@ -444,6 +446,33 @@ typedef struct _IMAGE_IMPORT_DESCRIPTOR {
     DWORD   Name;
     DWORD   FirstThunk;
 } IMAGE_IMPORT_DESCRIPTOR, *PIMAGE_IMPORT_DESCRIPTOR;
+
+typedef struct _IMAGE_RESOURCE_DIRECTORY {
+    DWORD   Characteristics;
+    DWORD   TimeDateStamp;
+    WORD    MajorVersion;
+    WORD    MinorVersion;
+    WORD    NumberOfNamedEntries;
+    WORD    NumberOfIdEntries;
+} IMAGE_RESOURCE_DIRECTORY, *PIMAGE_RESOURCE_DIRECTORY;
+
+typedef struct _IMAGE_RESOURCE_DIRECTORY_ENTRY {
+    union {
+        struct {
+            DWORD NameOffset : 31;
+            DWORD NameIsString : 1;
+        };
+        DWORD   Name;
+        WORD    Id;
+    };
+    union {
+        DWORD   OffsetToData;
+        struct {
+            DWORD   OffsetToDirectory : 31;
+            DWORD   DataIsDirectory : 1;
+        };
+    };
+} IMAGE_RESOURCE_DIRECTORY_ENTRY, *PIMAGE_RESOURCE_DIRECTORY_ENTRY;
 
 #define REG_NONE                    ( 0ul )
 #define REG_SZ                      ( 1ul )

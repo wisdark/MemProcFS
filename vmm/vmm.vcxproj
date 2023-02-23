@@ -323,6 +323,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\includes\leechcore.h" />
+    <ClInclude Include="..\includes\libpdbcrust.h" />
     <ClInclude Include="charutil.h" />
     <ClInclude Include="fc.h" />
     <ClInclude Include="infodb.h" />
@@ -348,6 +349,7 @@
     <ClInclude Include="vmmlog.h" />
     <ClInclude Include="vmmnet.h" />
     <ClInclude Include="vmmproc.h" />
+    <ClInclude Include="vmmvm.h" />
     <ClInclude Include="vmmwin.h" />
     <ClInclude Include="vmmwindef.h" />
     <ClInclude Include="vmmwininit.h" />
@@ -382,6 +384,7 @@
     <ClCompile Include="m_file_modules.c" />
     <ClCompile Include="m_findevil.c" />
     <ClCompile Include="m_misc_bitlocker.c" />
+    <ClCompile Include="m_misc_procinfo.c" />
     <ClCompile Include="m_misc_view.c" />
     <ClCompile Include="m_misc_web.c" />
     <ClCompile Include="m_phys2virt.c" />
@@ -408,6 +411,7 @@
     <ClCompile Include="m_vfsfc.c" />
     <ClCompile Include="m_vfsproc.c" />
     <ClCompile Include="m_vfsroot.c" />
+    <ClCompile Include="m_vm.c" />
     <ClCompile Include="m_winreg.c" />
     <ClCompile Include="ob\ob_cachemap.c" />
     <ClCompile Include="ob\ob_compressed.c" />
@@ -434,6 +438,7 @@
     <ClCompile Include="vmmlog.c" />
     <ClCompile Include="vmmnet.c" />
     <ClCompile Include="vmmproc.c" />
+    <ClCompile Include="vmmvm.c" />
     <ClCompile Include="vmmwin.c" />
     <ClCompile Include="pluginmanager.c" />
     <ClCompile Include="m_virt2phys.c" />

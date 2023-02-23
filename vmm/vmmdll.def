@@ -31,15 +31,15 @@ EXPORTS
     VMMDLL_UtilVfsWriteFile_BOOL
     VMMDLL_UtilVfsWriteFile_DWORD
     
-    VMMDLL_MemReadScatter
-    VMMDLL_MemReadPage
+    VMMDLL_MemPrefetchPages
     VMMDLL_MemRead
     VMMDLL_MemReadEx
-    VMMDLL_MemPrefetchPages
-    VMMDLL_MemWriteScatter
-    VMMDLL_MemWrite
-    VMMDLL_MemVirt2Phys
+    VMMDLL_MemReadPage
+    VMMDLL_MemReadScatter
     VMMDLL_MemSearch
+    VMMDLL_MemVirt2Phys
+    VMMDLL_MemWrite
+    VMMDLL_MemWriteScatter
 
     VMMDLL_Scatter_Initialize
     VMMDLL_Scatter_Prepare
@@ -60,6 +60,8 @@ EXPORTS
     VMMDLL_Map_GetPhysMem
     VMMDLL_Map_GetUsersU
     VMMDLL_Map_GetUsersW
+    VMMDLL_Map_GetVMU
+    VMMDLL_Map_GetVMW
     VMMDLL_Map_GetServicesU
     VMMDLL_Map_GetServicesW
     VMMDLL_Map_GetPteU
@@ -83,6 +85,7 @@ EXPORTS
     VMMDLL_Map_GetHandleU
     VMMDLL_Map_GetHandleW
     VMMDLL_ProcessGetInformation
+    VMMDLL_ProcessGetInformationAll
     VMMDLL_ProcessGetInformationString
     
     VMMDLL_ProcessGetDirectoriesU
@@ -105,7 +108,15 @@ EXPORTS
     VMMDLL_WinReg_EnumValueW
     VMMDLL_WinReg_QueryValueExU
     VMMDLL_WinReg_QueryValueExW
-    
+
+    VMMDLL_VmGetVmmHandle
+    VMMDLL_VmMemTranslateGPA
+    VMMDLL_VmMemRead
+    VMMDLL_VmMemReadScatter
+    VMMDLL_VmMemWrite
+    VMMDLL_VmMemWriteScatter
+    VMMDLL_VmScatterInitialize
+
     VMMDLL_PdbLoad
     VMMDLL_PdbSymbolName
     VMMDLL_PdbSymbolAddress

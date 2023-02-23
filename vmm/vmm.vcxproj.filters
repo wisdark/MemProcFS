@@ -141,6 +141,12 @@
     <ClInclude Include="vmmwork.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="vmmvm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\includes\libpdbcrust.h">
+      <Filter>Header Files\includes</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="vmmdll.c">
@@ -396,6 +402,15 @@
       <Filter>Source Files\modules</Filter>
     </ClCompile>
     <ClCompile Include="m_misc_view.c">
+      <Filter>Source Files\modules</Filter>
+    </ClCompile>
+    <ClCompile Include="vmmvm.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="m_vm.c">
+      <Filter>Source Files\modules</Filter>
+    </ClCompile>
+    <ClCompile Include="m_misc_procinfo.c">
       <Filter>Source Files\modules</Filter>
     </ClCompile>
   </ItemGroup>

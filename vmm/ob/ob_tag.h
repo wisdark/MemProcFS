@@ -1,6 +1,6 @@
 // ob.h : definitions of object tags.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OB_TAG_H__
@@ -8,6 +8,7 @@
 
 #include "ob.h"
 
+#define OB_TAG_CTX_MMISCINFO            'CMI '
 #define OB_TAG_FORENSIC_FILE            'Ffil'
 #define OB_TAG_INFODB_CTX               'IDBC'
 #define OB_TAG_MAP_PTE                  'Mpte'
@@ -23,6 +24,7 @@
 #define OB_TAG_MAP_HEAP                 'Mhp_'
 #define OB_TAG_MAP_HEAPALLOC            'MhpA'
 #define OB_TAG_MAP_OBJECT               'Mobj'
+#define OB_TAG_MAP_KDEVICE              'Mdev'
 #define OB_TAG_MAP_KDRIVER              'Mdrv'
 #define OB_TAG_MAP_PHYSMEM              'Mmem'
 #define OB_TAG_MAP_USER                 'Musr'
@@ -31,6 +33,7 @@
 #define OB_TAG_MAP_PFN                  'Mpfn'
 #define OB_TAG_MAP_EVIL                 'Mevl'
 #define OB_TAG_MAP_TASK                 'Mtsk'
+#define OB_TAG_MAP_VM                   'Mvm_'
 #define OB_TAG_MAP_WEB                  'Mweb'
 #define OB_TAG_MOD_CERTIFICATES         'mCer'
 #define OB_TAG_MOD_FCNTFS_CTX           'mFnt'
@@ -43,6 +46,7 @@
 #define OB_TAG_PDB_CTX                  'PdbC'
 #define OB_TAG_PDB_ENTRY                'PdbE'
 #define OB_TAG_PDB_KERNEL_CONTEXT       'PdbK'
+#define OB_TAG_PDBPARSE_CONTEXT          'PdbS'
 #define OB_TAG_PFN_CONTEXT              'PfnC'
 #define OB_TAG_PFN_PROC_TABLE           'PfnT'
 #define OB_TAG_REG_HIVE                 'Rhve'
@@ -51,6 +55,9 @@
 #define OB_TAG_VAD_MEM                  'MmSt'
 #define OB_TAG_WORK_PER_PROCESS         'WrkP'
 #define OB_TAG_WORK_WORKUNIT            'WrkU'
+#define OB_TAG_VM_CONTEXT               'VmC_'
+#define OB_TAG_VM_CONTEXT_TRANSLATE     'VmCt'
+#define OB_TAG_VM_GLOBAL                'VmG_'
 #define OB_TAG_VMM_PROCESS              'Ps__'
 #define OB_TAG_VMM_PROCESS_CLONE        'PsC_'
 #define OB_TAG_VMM_PROCESS_PERSISTENT   'PsSt'

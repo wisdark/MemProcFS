@@ -1,6 +1,6 @@
 // m_search.c : implementation of the virtual memory search built-in module.
 //
-// (c) Ulf Frisk, 2022
+// (c) Ulf Frisk, 2022-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmm.h"
@@ -183,6 +183,7 @@ NTSTATUS MSearch_Write(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_
                 }
                 LeaveCriticalSection(&H->vmm.LockPlugin);
             }
+            *pcbWrite = cb;
         }
         if(!_stricmp(ctxP->uszPath, "search.txt")) {
             memcpy(pbSearchBuffer, pObCtx->sctx.search[0].pb, 32);
@@ -203,6 +204,7 @@ NTSTATUS MSearch_Write(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_
                 }
                 LeaveCriticalSection(&H->vmm.LockPlugin);
             }
+            *pcbWrite = cb;
         }
     }
     Ob_DECREF(pObCtx);

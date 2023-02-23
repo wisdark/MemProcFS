@@ -13,11 +13,11 @@ public class VmmExample {
 
 	public static void main(String[] args) {	
 		// Initialize VMM.DLL
-		// arguments are as they are given on the command line.
-		// also required is to specify the path to the native MemProcFS files
-		// important! remember to close the vmm object after use to free up native resources!
+		// Arguments are as they are given on the command line.
+		// Also required is to specify the path to the native MemProcFS files.
+		// Important! remember to close the vmm object after use to free up native resources!
 		String strPathToNativeBinaries = "C:\\Github\\MemProcFS-dev\\files";
-		String[] argv = {"-printf", "-device", "c:\\dumps\\WIN7-X64-SP1-1.pmem"};
+		String[] argv = {"-device", "c:\\dumps\\WIN7-X64-SP1-1.pmem", "-printf", "-v"};
 		IVmm vmm = IVmm.initializeVmm(strPathToNativeBinaries, argv);
 
 		// Get/Set option
@@ -34,6 +34,7 @@ public class VmmExample {
 		long[] physmem_prefetch = {0x1000, 0x10000, 0x20000};
 		vmm.memPrefetchPages(physmem_prefetch);
 		byte[] physmem_read = vmm.memRead(0x1000, 0x100);
+		byte[] physmem_read_withflags = vmm.memRead(0x1000, 0x100, IVmm.FLAG_NOCACHE | IVmm.FLAG_ZEROPAD_ON_FAIL);
 		//vmm.memWrite(0x400, physmem_read);
 		
 		// physical memory scatter efficient read/write
@@ -51,7 +52,7 @@ public class VmmExample {
 		List<VmmMap_NetEntry> maps_net = vmm.mapNet();
 		List<VmmMap_UserEntry> maps_users = vmm.mapUser();
 		List<VmmMap_ServiceEntry> maps_services = vmm.mapService();
-		VmmMap_PoolMap maps_pool = vmm.mapPool();
+		VmmMap_PoolMap maps_pool = vmm.mapPool(true);			// retrieve big pool entries only (faster). 
 		
 		// get kernel info
 		IVmmProcess processKernel1 = vmm.kernelProcess();
@@ -74,11 +75,17 @@ public class VmmExample {
 		List<VmmMap_VadExEntry> procmaps_VADex = processExplorer.mapVadEx(0, 0x100);
 		
 		// get module
-		List<IVmmModule> moduleExplorerAll = processExplorer.moduleGetAll();
-		IVmmModule moduleExplorerKernel32 = processExplorer.moduleGet("kernel32.dll");
+		List<IVmmModule> moduleExplorerAll = processExplorer.moduleGetAll(false);				// retrieve without extended debug/version info.
+		IVmmModule moduleExplorerKernel32 = processExplorer.moduleGet("kernel32.dll", true);	// retrieve with extended debug/version info.
 		
 		// get some module info (additional info exists - check interface for more!)
 		String strModuleKernel32Full = moduleExplorerKernel32.getNameFull();
+		
+		// get debug info and version info of kernel32.
+		// This requires that the module have been initialized with isExtendedInfo = true,
+		// but the call may still fail and return null if required memory is unreadable.
+		Vmm_ModuleExDebugInfo moduleExplorerKernel32_DebugInfo = moduleExplorerKernel32.getExDebugInfo();
+		Vmm_ModuleExVersionInfo moduleExplorerKernel32_VersionInfo = moduleExplorerKernel32.getExVersionInfo();
 		
 		// get module maps for kernel32:
 		List<VmmMap_ModuleDataDirectory> moduleKernel32_DataDirectory = moduleExplorerKernel32.mapDataDirectory();
@@ -91,7 +98,7 @@ public class VmmExample {
 		IVmmPdb pdbKernel32 = moduleExplorerKernel32.getPdb();
 		long vaGetProcAddress = pdbKernel32.getSymbolAddress("GetProcAddress");
 		int cbEprocess = pdbKernel.getTypeSize("_EPROCESS");
-		int oEprocessToken = pdbKernel.getTypeChildOffset("_EPROCESS", "Token");
+		int oEprocessToken = pdbKernel.getTypeChildOffset("_EPROCESS", "Token");	
 		
 		// registry
 		List<IVmmRegHive> reghives = vmm.regHive();

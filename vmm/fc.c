@@ -9,7 +9,7 @@
 //      is generally stored in an sqlite database with may be used to query
 //      the results.
 //
-// (c) Ulf Frisk, 2020-2022
+// (c) Ulf Frisk, 2020-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -223,7 +223,8 @@ LPSTR FcCsv_FileTime(_In_ VMMDLL_CSV_HANDLE h, _In_ QWORD ft)
 LPSTR FcCsv_String(_In_ VMMDLL_CSV_HANDLE h, _In_opt_ LPSTR usz)
 {
     DWORD o, cbv = 0;
-    if(!usz || !CharUtil_UtoCSV(usz, -1, NULL, 0, NULL, &cbv, 0)) { return ""; }
+    if(!usz) { usz = ""; }
+    if(!CharUtil_UtoCSV(usz, -1, NULL, 0, NULL, &cbv, 0)) { return ""; }
     if(h && (sizeof(h->pb) - h->o > cbv)) {
         o = h->o;
         if(!CharUtil_UtoCSV(usz, -1, h->pb + o, sizeof(h->pb) - h->o, NULL, &cbv, CHARUTIL_FLAG_STR_BUFONLY)) { return ""; }
@@ -986,11 +987,13 @@ VOID FcInitialize_ThreadProc(_In_ VMM_HANDLE H, _In_ QWORD qwNotUsed)
 {
     BOOL fResult = FALSE;
     VMMDLL_CSV_HANDLE hCSV = NULL;
+    PVMMOB_MAP_VM pObVmMap = NULL;
     PVMMOB_MAP_EVIL pObEvilMap = NULL;
     HANDLE hEventAsyncLogCSV = 0, hEventAsyncLogJSON = 0, hEventAsyncIngestVirtmem = 0, hEventAsyncIngestVirtmemKernel = 0;
     QWORD tmStart = Statistics_CallStart(H);
     QWORD tcStart = GetTickCount64();
     VmmLog(H, MID_FORENSIC, LOGLEVEL_4_VERBOSE, "INIT START");
+    VmmLog(H, MID_FORENSIC, LOGLEVEL_5_DEBUG, "INIT %i%% time=%llis", H->fc->cProgressPercent, ((GetTickCount64() - tcStart) / 1000));
     if(SQLITE_OK != Fc_SqlExec(H, FC_SQL_SCHEMA_STR)) { goto fail; }
     if(H->fAbort) { goto fail; }
     if(!(hCSV = LocalAlloc(LMEM_ZEROINIT, sizeof(struct tdVMMDLL_CSV_HANDLE)))) { goto fail; }
@@ -999,10 +1002,13 @@ VOID FcInitialize_ThreadProc(_In_ VMM_HANDLE H, _In_ QWORD qwNotUsed)
     if(!(hEventAsyncIngestVirtmem = CreateEvent(NULL, TRUE, TRUE, NULL))) { goto fail; }
     if(!(hEventAsyncIngestVirtmemKernel = CreateEvent(NULL, TRUE, TRUE, NULL))) { goto fail; }
     PluginManager_Notify(H, VMMDLL_PLUGIN_NOTIFY_FORENSIC_INIT, NULL, 0);
+    VmmMap_GetVM(H, &pObVmMap);                 // force fetch VMs before starting forensic actions.
+    Ob_DECREF_NULL(&pObVmMap);
     VmmMap_GetEvil(H, NULL, &pObEvilMap);       // start findevil (in 'async' mode)
     Ob_DECREF_NULL(&pObEvilMap);
     PluginManager_FcInitialize(H);              // 0-10%
     H->fc->cProgressPercent = 10;
+    VmmLog(H, MID_FORENSIC, LOGLEVEL_5_DEBUG, "INIT %i%% time=%llis", H->fc->cProgressPercent, ((GetTickCount64() - tcStart) / 1000));
     if(H->fAbort) { goto fail; }
     // parallel async init of: scan virtual per-process/kernel address space & init of json log
     VmmWork_Void(H, (PVMM_WORK_START_ROUTINE_PVOID_PFN)PluginManager_FcLogCSV, hCSV, hEventAsyncLogCSV, VMMWORK_FLAG_PRIO_LOW);
@@ -1197,7 +1203,7 @@ BOOL FcInitialize_Impl(_In_ VMM_HANDLE H, _In_ DWORD dwDatabaseType, _In_ BOOL f
     }
     H->cfg.tpForensicMode = dwDatabaseType;
     PDB_Initialize_WaitComplete(H);
-    if(H->fAbort) { goto fail; }
+    if(!PluginManager_Initialize(H)) { goto fail; }
     // 1: ALLOCATE AND INITIALIZE.
     if(H->fc) { FcClose(H); }
     if(!(H->fc = (PFC_CONTEXT)LocalAlloc(LMEM_ZEROINIT, sizeof(FC_CONTEXT)))) { goto fail; }
@@ -1219,8 +1225,8 @@ BOOL FcInitialize_Impl(_In_ VMM_HANDLE H, _In_ DWORD dwDatabaseType, _In_ BOOL f
         if(!(H->fc->db.hEventIngestPhys[i] = CreateEvent(NULL, FALSE, TRUE, NULL))) { goto fail; }
         if(SQLITE_OK != sqlite3_open_v2(H->fc->db.szuDatabase, &H->fc->db.hSql[i], SQLITE_OPEN_URI | SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_SHAREDCACHE | SQLITE_OPEN_NOMUTEX, NULL)) { goto fail; }
     }
-    VmmWork_Value(H, FcInitialize_ThreadProc, 0, 0, VMMWORK_FLAG_PRIO_LOW);
     H->fc->fInitStart = TRUE;
+    VmmWork_Value(H, FcInitialize_ThreadProc, 0, 0, VMMWORK_FLAG_PRIO_LOW);
     return TRUE;
 fail:
     FcClose(H);

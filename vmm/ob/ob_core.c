@@ -14,7 +14,7 @@
 // - such as decreasing reference count of sub-objects contained in the object
 // that is to be deallocated.
 //
-// (c) Ulf Frisk, 2018-2022
+// (c) Ulf Frisk, 2018-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "ob.h"
@@ -119,16 +119,18 @@ PVOID Ob_XDECREF(_In_opt_ PVOID pObIn)
 }
 
 /*
-* Decrease the reference count of a object manager object. If the reference
-* count reaches zero the object will be cleaned up.
+* Decrease the reference count of a object manager object.
+* If the reference count reaches zero the object will be cleaned up.
 * Also set the incoming pointer to NULL.
 * -- ppOb
 */
 VOID Ob_XDECREF_NULL(_In_opt_ PVOID *ppOb)
 {
+    POB pOb;
     if(ppOb) {
-        Ob_DECREF(*ppOb);
+        pOb = (POB)*ppOb;
         *ppOb = NULL;
+        Ob_DECREF(pOb);
     }
 }
 

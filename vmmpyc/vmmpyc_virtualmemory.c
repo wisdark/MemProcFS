@@ -1,6 +1,6 @@
 // vmmpyc_virtualmemory.c : implementation of process virtual memory for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -57,7 +57,7 @@ VmmPycVirtualMemory_scatter_initialize(PyObj_VirtualMemory *self, PyObject *args
     if(!PyArg_ParseTuple(args, "|k", &dwReadFlags)) { // borrowed reference
         return PyErr_Format(PyExc_RuntimeError, "VirtualMemory.scatter_initialize(): Illegal argument.");
     }
-    return (PyObject*)VmmPycScatterMemory_InitializeInternal(self->pyVMM, self->dwPID, dwReadFlags);
+    return (PyObject*)VmmPycScatterMemory_InitializeInternal(self->pyVMM, NULL, self->dwPID, dwReadFlags);
 }
 
 //-----------------------------------------------------------------------------

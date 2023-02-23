@@ -92,10 +92,18 @@
     <ClCompile Include="vmmpyc_scattermemory.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="vmmpyc_virtualmachine.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="vmmpyc.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

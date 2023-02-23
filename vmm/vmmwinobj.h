@@ -1,6 +1,6 @@
 // vmmwinobj.h : declarations of functionality related to windows object manager.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -122,6 +122,14 @@ BOOL VmmWinObjFile_GetByProcess(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _
 */
 _Success_(return != 0)
 DWORD VmmWinObjFile_Read(_In_ VMM_HANDLE H, _In_ POB_VMMWINOBJ_FILE pFile, _In_ QWORD cbOffset, _Out_writes_(cb) PBYTE pb, _In_ DWORD cb, _In_ QWORD fVmmRead);
+
+/*
+* Create an kernel device map and assign to the global vmm context upon success.
+* CALLER DECREF: return
+* -- H
+* -- return
+*/
+PVMMOB_MAP_KDEVICE VmmWinObjKDev_Initialize(_In_ VMM_HANDLE H);
 
 /*
 * Create an kernel driver map and assign to the global vmm context upon success.

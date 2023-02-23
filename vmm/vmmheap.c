@@ -10,7 +10,7 @@
 // The segment heap is reliant on symbols and it will not be possible to parse
 // without symbols.s
 //
-// (c) Ulf Frisk, 2022
+// (c) Ulf Frisk, 2022-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -22,6 +22,7 @@
 #include "util.h"
 #include "charutil.h"
 #include "pdb.h"
+#include "statistics.h"
 
 #define VMMHEAP_MAX_HEAPS       0x80
 
@@ -254,7 +255,7 @@ VOID VmmHeapAlloc_GetHeapKeys(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In
     if(pdwNtLfhKey && !PDB_GetSymbolDWORD(H, hPDB, "RtlpLFHKey", pProcess, pdwNtLfhKey))   { *pdwNtLfhKey = 0;  }
     if(!pqwSegHeapGbl && !pdwSegLfhKey && (!pqwNtHeapKey || *pqwNtHeapKey) && (!pdwNtLfhKey || *pdwNtLfhKey)) { return; }
     // try slow path: (load symbols via module list)
-    if(VmmMap_GetModuleEntryEx(H, pProcess, 0, "ntdll.dll", &pObModuleMap, &pNtdll)) {
+    if(VmmMap_GetModuleEntryEx(H, pProcess, 0, "ntdll.dll", 0, &pObModuleMap, &pNtdll)) {
         if(fWow != pNtdll->fWoW64) {
             pNtdll = NULL;
             for(i = 0; i < pObModuleMap->cMap; i++) {
@@ -355,7 +356,7 @@ fail:
         Ob_DECREF(ctx->pHeapMap);
         LocalFree(ctx);
     }
-    VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "INIT HEAPALLOCMAP END: pid=%5i heap=%llx alloc=%x", pProcess->dwPID, vaHeap, (pObAlloc ? pObAlloc->cMap : 0));
+    VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "INIT HEAPALLOCMAP END:   pid=%5i heap=%llx count=%i", pProcess->dwPID, vaHeap, (pObAlloc ? pObAlloc->cMap : 0));
     return pObAlloc;
 }
 
@@ -1299,18 +1300,14 @@ int VmmHeap_qsort_HeapEntry(PVMM_MAP_HEAPENTRY p1, PVMM_MAP_HEAPENTRY p2)
 */
 VOID VmmHeap_Initialize_DoWork(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
 {
-    QWORD qwScatterPre = 0, qwScatterPost = 0;
     VMMHEAP_INIT_CONTEXT ctxInit = { 0 };
     PVMMOB_MAP_HEAP pObHeapMap;
     PVMM_MAP_HEAPENTRY peH;
     PVMM_MAP_HEAP_SEGMENTENTRY peR;
     DWORD i, cbData, cHeaps, cSegments;
-    BOOL fLog = VmmLogIsActive(H, MID_HEAP, LOGLEVEL_6_TRACE);
+    VMMSTATISTICS_LOG Statistics = { 0 };
     // init:
-    if(fLog) {
-        VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "INIT HEAPMAP START: pid=%5i", pProcess->dwPID);
-        LcGetOption(H->hLC, LC_OPT_CORE_STATISTICS_CALL_COUNT | LC_STATISTICS_ID_READSCATTER, &qwScatterPre);
-    }
+    VmmStatisticsLogStart(H, MID_HEAP, LOGLEVEL_6_TRACE, pProcess, &Statistics, "INIT_HEAPMAP");
     ctxInit.pProcess = pProcess;
     if(!(ctxInit.psPrefetch = ObSet_New(H))) { goto fail; }
     if(!(ctxInit.pmeHeap = ObMap_New(H, OB_MAP_FLAGS_OBJECT_LOCALFREE))) { goto fail; }
@@ -1358,10 +1355,7 @@ fail:
     Ob_DECREF(ctxInit.pmeHeap);
     Ob_DECREF(ctxInit.pmeHeapSegment);
     Ob_DECREF(ctxInit.psPrefetch);
-    if(fLog) {
-        LcGetOption(H->hLC, LC_OPT_CORE_STATISTICS_CALL_COUNT | LC_STATISTICS_ID_READSCATTER, &qwScatterPost);
-        VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "INIT HEAPMAP END:   pid=%5i scatter=%lli", pProcess->dwPID, qwScatterPost - qwScatterPre);
-    }
+    VmmStatisticsLogEnd(H, &Statistics, "INIT_HEAPMAP");
 }
 
 /*

@@ -1,6 +1,6 @@
 // vmmpyc_vmm.c : implementation of core functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2022
+// (c) Ulf Frisk, 2021-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -212,6 +212,20 @@ VmmPycVmm_maps(PyObj_Vmm *self, void *closure)
 // VmmPycVmm INITIALIZATION AND CORE FUNCTIONALITY BELOW:
 //-----------------------------------------------------------------------------
 
+PyObj_Vmm*
+VmmPycVmm_InitializeInternal2(_In_ PyObj_Vmm *pyVMM, _In_ VMM_HANDLE hVMM)
+{
+    PyObj_Vmm *pyObj;
+    if(!(pyObj = PyObject_New(PyObj_Vmm, (PyTypeObject*)g_pPyType_Vmm))) { return NULL; }
+    pyObj->hVMM = hVMM;
+    pyObj->fVmmCoreOpenType = TRUE;
+    pyObj->pyObjKernel = (PyObject*)VmmPycKernel_InitializeInternal(pyObj);
+    pyObj->pyObjMemory = (PyObject*)VmmPycPhysicalMemory_InitializeInternal(pyObj);
+    pyObj->pyObjVfs = (PyObject *)VmmPycVfs_InitializeInternal(pyObj);
+    pyObj->fValid = TRUE;
+    return pyObj;
+}
+
 static PyObject*
 VmmPycVmm_repr(PyObj_Vmm *self)
 {
@@ -270,27 +284,24 @@ VmmPycVmm_init(PyObj_Vmm *self, PyObject *args, PyObject *kwds)
             return -1;
         }
         self->fVmmCoreOpenType = TRUE;
-        // initialize vfs:
-        if(!self->pyObjVfs) {
-            self->pyObjVfs = (PyObject *)VmmPycVfs_InitializeInternal(self);
-        }
     } else {    // INITIALIZE EXISTING VMM (CHECK IF EXISTING IS VALID)
         self->hVMM = g_PluginVMM;
         pyObjProcessTest = (PyObject*)VmmPycProcess_InitializeInternal(self, 4, TRUE);
         if(!pyObjProcessTest) {
-            PyErr_SetString(PyExc_TypeError, "Vmm.init(): Initialization of existing vmm failed - please initialize with startup options.");
             return -1;
         }
+        Py_DECREF(pyObjProcessTest);
         if(g_PluginVMM_LoadedOnce) {
-            PyErr_SetString(PyExc_TypeError, "Vmm.init(): Initialization of existing vmm failed - only allowed once per process.");
             return -1;
         }
         if(!g_PluginVMM) {
-            PyErr_SetString(PyExc_TypeError, "Vmm.init(): Missing VMM handle.");
             return -1;
         }
         g_PluginVMM_LoadedOnce = TRUE;
-        Py_DECREF(pyObjProcessTest);
+    }
+    // initialize vfs:
+    if(!self->pyObjVfs) {
+        self->pyObjVfs = (PyObject*)VmmPycVfs_InitializeInternal(self);
     }
     // success - initialize type object and return!
     self->pyObjKernel = (PyObject*)VmmPycKernel_InitializeInternal(self);

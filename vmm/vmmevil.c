@@ -1,6 +1,6 @@
 // evil.c : implementation of functionality related to the "Evil" functionality.
 //
-// (c) Ulf Frisk, 2020-2022
+// (c) Ulf Frisk, 2020-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmevil.h"
@@ -361,7 +361,7 @@ VOID VmmEvil_ProcessScan_Modules(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, 
     PVMM_MAP_MODULEENTRY pe;
     PVMMOB_MAP_MODULE pObModuleMap = NULL;
     if((pProcess->dwPPID == 4) && !memcmp("MemCompression", pProcess->szName, 15)) { return; }
-    if(!VmmMap_GetModule(H, pProcess, &pObModuleMap)) { return; }
+    if(!VmmMap_GetModule(H, pProcess, 0, &pObModuleMap)) { return; }
     for(i = 0; i < pObModuleMap->cMap; i++) {
         if(pObModuleMap->pMap[i].tp == VMM_MODULE_TP_NORMAL) {
             fBadLdr = FALSE;
@@ -397,6 +397,18 @@ VOID VmmEvil_ProcessScan_PebMasquerade(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pPro
     if(CharUtil_StrEndsWith(pProcess->pObPersistent->uszPathKernel, pu->uszImagePathName + 12, TRUE)) { return; }                       // ends-with
     if(!CharUtil_StrEndsWith(pProcess->pObPersistent->uszPathKernel, pu->uszImagePathName + strlen(pu->uszImagePathName) - 4, TRUE)) { return; }  // file-ending match (remove windows apps)
     VmmEvil_AddEvil_NoVadReq(ctxEvil, pProcess, VMM_EVIL_TP_PEB_MASQUERADE, 0, 0, 0, NULL, FALSE);
+}
+
+/*
+* Some malware may masquerade the proper paging base (DirectoryTableBase) in EPROCESS
+* to hide a process page tables. This will result in a running process having invalid
+* page tables (0 in MemProcFS implementation).
+*/
+VOID VmmEvil_ProcessScan_BadDTB(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inout_ PVMMEVIL_INIT_CONTEXT ctxEvil)
+{
+    if(!pProcess->paDTB) {
+        VmmEvil_AddEvil_NoVadReq(ctxEvil, pProcess, VMM_EVIL_TP_PROC_BAD_DTB, pProcess->paDTB_Kernel, 0, 0, NULL, FALSE);
+    }
 }
 
 /*
@@ -491,18 +503,23 @@ VOID VmmEvil_ProcessScan(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inout_ 
 {
     POB_SET psObInjectedPE = NULL;
     if(!pProcess->fUserOnly) { goto fail; }
-    if(!(psObInjectedPE = ObSet_New(H))) { goto fail; }
+    if(!(psObInjectedPE = ObSet_New(H))) { goto fail; }    
     // scan image vads for executable memory not matching prototype pages.
+    if(H->fAbort) { goto fail; }
     VmmEvil_ProcessScan_VadImageExecuteNoProto(H, pProcess, ctxEvil);
     // update result with execute pages in non image vads.
     // also commit to modules map as injected PE (if possible).
+    if(H->fAbort) { goto fail; }
     VmmEvil_ProcessScan_VadNoImageExecute(H, pProcess, ctxEvil, psObInjectedPE);
     VmmWinLdrModule_Initialize(H, pProcess, psObInjectedPE);
     // update result with interesting module entries.
+    if(H->fAbort) { goto fail; }
     VmmEvil_ProcessScan_Modules(H, pProcess, ctxEvil);
     // update with other process-related findings:
+    if(H->fAbort) { goto fail; }
     VmmEvil_ProcessScan_BadParent(H, pProcess, ctxEvil);
     VmmEvil_ProcessScan_BadUser(H, pProcess, ctxEvil);
+    VmmEvil_ProcessScan_BadDTB(H, pProcess, ctxEvil);
     VmmEvil_ProcessScan_PebMasquerade(H, pProcess, ctxEvil);
     // scan for kernel related issues (system process)}
 fail:
@@ -539,7 +556,7 @@ VOID VmmEvil_ProcessScan_KDriverPath(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSyste
     DWORD iDriver, iPathAllow;
     BOOL fOK;
     if(!VmmMap_GetKDriver(H, &pObDriverMap)) { goto fail; }
-    if(!VmmMap_GetModule(H, pSystemProcess, &pObModuleMap)) { goto fail; }
+    if(!VmmMap_GetModule(H, pSystemProcess, 0, &pObModuleMap)) { goto fail; }
     if(!VmmMap_GetModuleEntryEx3(H, pObModuleMap, &pmObModuleByVA)) { goto fail; }
     for(iDriver = 0; iDriver < pObDriverMap->cMap; iDriver++) {
         peDriver = pObDriverMap->pMap + iDriver;
@@ -575,6 +592,7 @@ fail:
 */
 VOID VmmEvil_KernelScan(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProcess, _Inout_ PVMMEVIL_INIT_CONTEXT ctxEvil)
 {
+    if(H->fAbort) { return; }
     VmmEvil_ProcessScan_KDriverPath(H, pSystemProcess, ctxEvil);
     VmmLog(H, MID_EVIL, LOGLEVEL_6_TRACE, "COMPLETED_KERNEL_SCAN");
 }
@@ -774,7 +792,7 @@ PVMMOB_MAP_EVIL VmmEvil_Initialize(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pPro
 VOID VmmEvil_InitializeAll_WaitFinish(_In_ VMM_HANDLE H)
 {
     Ob_DECREF(VmmEvil_Initialize(H, NULL));
-    while(H->vmm.EvilContext.cProgressPercent != 100) {
+    while(!H->fAbort && (H->vmm.EvilContext.cProgressPercent != 100)) {
         Sleep(50);
     }
 }

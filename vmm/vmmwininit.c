@@ -2,13 +2,12 @@
 //                systems. Contains functions for detecting DTB and Memory Model
 //                as well as the Windows kernel base and core functionality.
 //
-// (c) Ulf Frisk, 2018-2022
+// (c) Ulf Frisk, 2018-2023
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
 #include "vmm.h"
 #include "mm.h"
-#include "mm_pfn.h"
 #include "pe.h"
 #include "pdb.h"
 #include "util.h"
@@ -160,7 +159,6 @@ VOID VmmWinInit_TryInitializeKernelOptionalValues(_In_ VMM_HANDLE H)
     if(!H->vmm.kernel.opt.vaPfnDatabase) {
         PDB_GetSymbolPTR(H, PDB_HANDLE_KERNEL, "MmPfnDatabase", pObSystemProcess, &H->vmm.kernel.opt.vaPfnDatabase);
     }
-    MmPfn_Initialize(H, pObSystemProcess);
     // PsLoadedModuleListExp
     if(!H->vmm.kernel.opt.vaPsLoadedModuleListExp) {
         PDB_GetSymbolAddress(H, PDB_HANDLE_KERNEL, "PsLoadedModuleList", &H->vmm.kernel.opt.vaPsLoadedModuleListExp);
@@ -978,6 +976,7 @@ VOID VmmWinInit_TryInitialize_Async(_In_ VMM_HANDLE H, _In_ QWORD qwNotUsed)
 {
     POB_SET psObNoLinkEPROCESS = NULL;
     PVMM_PROCESS pObSystemProcess = NULL;
+    PVMMOB_MAP_VM pObVmMap = NULL;
     PDB_Initialize_WaitComplete(H);
     MmWin_PagingInitialize(H, TRUE);   // initialize full paging (memcompression)
     VmmWinInit_TryInitializeThreading(H);
@@ -991,6 +990,9 @@ VOID VmmWinInit_TryInitialize_Async(_In_ VMM_HANDLE H, _In_ QWORD qwNotUsed)
         Ob_DECREF(psObNoLinkEPROCESS);
         Ob_DECREF(pObSystemProcess);
     }
+    // vm parse (if enabled)
+    VmmMap_GetVM(H, &pObVmMap);
+    Ob_DECREF(pObVmMap);
 }
 
 /*
@@ -1072,7 +1074,7 @@ BOOL VmmWinInit_TryInitialize(_In_ VMM_HANDLE H, _In_opt_ QWORD paDTBOpt)
     }
     // Initialization functionality:
     InfoDB_Initialize(H);
-    PDB_Initialize(H, NULL, TRUE);                              // Async init of PDB subsystem.
+    PDB_Initialize(H, NULL, !H->cfg.fWaitInitialize);           // Init of PDB subsystem (async/sync).
     VmmWinInit_FindPsLoadedModuleListKDBG(H, pObSystemProcess); // Find PsLoadedModuleList and possibly KDBG.
     VmmWinObj_Initialize(H);                                    // Windows Objects Manager.
     VmmWinReg_Initialize(H);                                    // Registry.
@@ -1083,14 +1085,16 @@ BOOL VmmWinInit_TryInitialize(_In_ VMM_HANDLE H, _In_opt_ QWORD paDTBOpt)
     } else {
         VmmWork_Value(H, VmmWinInit_TryInitialize_Async, 0, 0, VMMWORK_FLAG_PRIO_NORMAL); // async initialization
     }
-    // return
+    // clean up, print version (unless python execute parameter is set) and return!
     Ob_DECREF(pObSystemProcess);
-    vmmprintf(H,
-        "Initialized %i-bit Windows %i.%i.%i\n",
-        (H->vmm.f32 ? 32 : 64),
-        H->vmm.kernel.dwVersionMajor,
-        H->vmm.kernel.dwVersionMinor,
-        H->vmm.kernel.dwVersionBuild);
+    if(!H->cfg.szPythonExecuteFile[0]) {
+        vmmprintf(H,
+            "Initialized %i-bit Windows %i.%i.%i\n",
+            (H->vmm.f32 ? 32 : 64),
+            H->vmm.kernel.dwVersionMajor,
+            H->vmm.kernel.dwVersionMinor,
+            H->vmm.kernel.dwVersionBuild);
+    }
     return TRUE;
 fail:
     VmmInitializeMemoryModel(H, VMM_MEMORYMODEL_NA); // clean memory model
