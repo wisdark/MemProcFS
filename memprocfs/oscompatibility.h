@@ -38,12 +38,14 @@ typedef uint32_t                            BOOL, *PBOOL;
 typedef uint8_t                             BYTE, *PBYTE, *LPBYTE;
 typedef uint8_t                             UCHAR, *PUCHAR;
 typedef char                                CHAR, *PCHAR, *PSTR, *LPSTR;
+typedef const char                          *LPCSTR;
 typedef int16_t                             SHORT, *PSHORT;
-typedef int32_t                             UINT, LONG;
+typedef int32_t                             LONG;
 typedef int64_t                             LONGLONG;
 typedef uint16_t                            WORD, *PWORD, USHORT, *PUSHORT;
-typedef uint16_t                            WCHAR, *PWCHAR, *LPWSTR, *LPCWSTR;
-typedef uint32_t                            DWORD, *PDWORD, *LPDWORD, NTSTATUS, ULONG, *PULONG, ULONG32;
+typedef uint16_t                            WCHAR, *PWCHAR, *LPWSTR;
+typedef const uint16_t                      *LPCWSTR;
+typedef uint32_t                            UINT, DWORD, *PDWORD, *LPDWORD, NTSTATUS, ULONG, *PULONG, ULONG32;
 typedef long long unsigned int              QWORD, *PQWORD, ULONG64, *PULONG64, ULONG_PTR;
 typedef uint64_t                            DWORD64, *PDWORD64, LARGE_INTEGER, *PLARGE_INTEGER, ULONGLONG, FILETIME, *PFILETIME;
 typedef size_t                              SIZE_T, *PSIZE_T;
@@ -55,6 +57,7 @@ typedef struct tdSID { BYTE pb[12]; } SID, *PSID;
 typedef DWORD(*PTHREAD_START_ROUTINE)(PVOID);
 typedef DWORD(*LPTHREAD_START_ROUTINE)(PVOID);
 typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void const *);
+#define __forceinline                       inline __attribute__((always_inline))
 #define errno_t                             int
 #define CONST                               const
 #define TRUE                                1

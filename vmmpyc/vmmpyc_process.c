@@ -1,6 +1,6 @@
 // vmmpyc_process.c : implementation of process functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -111,7 +111,9 @@ static PyObject*
 VmmPycProcess_memory(PyObj_Process *self, void *closure)
 {
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Process.memory: Not initialized."); }
-    return (PyObject*)VmmPycVirtualMemory_InitializeInternal(self->pyVMM, self->dwPID);
+    if(!self->pyObjMemoryOpt) { self->pyObjMemoryOpt = (PyObject*)VmmPycVirtualMemory_InitializeInternal(self->pyVMM, self->dwPID); }
+    Py_XINCREF(self->pyObjMemoryOpt);
+    return self->pyObjMemoryOpt;
 }
 
 // -> *PyObj_ProcessMaps
@@ -119,7 +121,37 @@ static PyObject*
 VmmPycProcess_maps(PyObj_Process *self, void *closure)
 {
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Process.maps: Not initialized."); }
-    return (PyObject *)VmmPycProcessMaps_InitializeInternal(self->pyVMM, self->dwPID);
+    if(!self->pyObjMapsOpt) { self->pyObjMapsOpt = (PyObject*)VmmPycProcessMaps_InitializeInternal(self->pyVMM, self->dwPID); }
+    Py_XINCREF(self->pyObjMapsOpt);
+    return self->pyObjMapsOpt;
+}
+
+// (|QWORD, QWORD, QWORD) -> PyObj_Search*
+static PyObject*
+VmmPycProcess_search(PyObj_Process *self, PyObject *args)
+{
+    PyObject *pyObj;
+    LPSTR uszName = NULL;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Process.search(): Not initialized."); }
+    pyObj = (PyObject*)VmmPycSearch_InitializeInternal(self->pyVMM, self->dwPID, args);
+    if(!pyObj) {
+        return PyErr_Format(PyExc_RuntimeError, "Process.search(): Illegal argument.");
+    }
+    return pyObj;
+}
+
+// (PyList(STR), |QWORD, QWORD, DWORD, QWORD) ->PyObj_Yara*
+static PyObject*
+VmmPycProcess_search_yara(PyObj_Process *self, PyObject *args)
+{
+    PyObject *pyObj;
+    LPSTR uszName = NULL;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Process.search_yara(): Not initialized."); }
+    pyObj = (PyObject*)VmmPycYara_InitializeInternal(self->pyVMM, self->dwPID, args);
+    if(!pyObj) {
+        return PyErr_Format(PyExc_RuntimeError, "Process.search_yara(): Illegal argument.");
+    }
+    return pyObj;
 }
 
 //-----------------------------------------------------------------------------
@@ -331,6 +363,8 @@ VmmPycProcess_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_ DWORD dwPID, _In_ B
     pyObj->fValid = TRUE;
     pyObj->dwPID = dwPID;
     pyObj->fValidInfo = FALSE;
+    pyObj->pyObjMapsOpt = NULL;
+    pyObj->pyObjMemoryOpt = NULL;
     return pyObj;
 }
 
@@ -353,7 +387,10 @@ static void
 VmmPycProcess_dealloc(PyObj_Process *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyObjMapsOpt);
+    Py_XDECREF(self->pyObjMemoryOpt);
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)
@@ -362,6 +399,8 @@ BOOL VmmPycProcess_InitializeType(PyObject *pModule)
     static PyMethodDef PyMethods[] = {
         {"module_list", (PyCFunction)VmmPycProcess_module_list, METH_VARARGS, "Retrieve all loaded modules (dlls)."},
         {"module", (PyCFunction)VmmPycProcess_module, METH_VARARGS, "Retrieve a single module (dll) from its name."},
+        {"search", (PyCFunction)VmmPycProcess_search, METH_VARARGS, "Perform a binary search."},
+        {"search_yara", (PyCFunction)VmmPycProcess_search_yara, METH_VARARGS, "Perform a YARA search."},
         {NULL, NULL, 0, NULL}
     };
     static PyMemberDef PyMembers[] = {

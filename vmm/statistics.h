@@ -1,6 +1,6 @@
 // statistics.h : definitions of statistics related functionality.
 //
-// (c) Ulf Frisk, 2016-2023
+// (c) Ulf Frisk, 2016-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __STATISTICS_H__
@@ -19,6 +19,8 @@ typedef enum tdSTATISTICS_ID {
     STATISTICS_ID_PluginManager_FcTimeline,
     STATISTICS_ID_PluginManager_FcLogCSV,
     STATISTICS_ID_PluginManager_FcLogJSON,
+    STATISTICS_ID_PluginManager_FcFindEvil,
+    STATISTICS_ID_PluginManager_FcIngestObject,
     STATISTICS_ID_PluginManager_FcIngestPhysmem,
     STATISTICS_ID_PluginManager_FcIngestVirtmem,
     STATISTICS_ID_PluginManager_FcIngestFinalize,
@@ -62,6 +64,7 @@ typedef enum tdSTATISTICS_ID {
     STATISTICS_ID_VMMDLL_Map_GetVM,
     STATISTICS_ID_VMMDLL_Map_GetServices,
     STATISTICS_ID_VMMDLL_Map_GetPfn,
+    STATISTICS_ID_VMMDLL_Map_GetPfnEx,
     STATISTICS_ID_VMMDLL_ProcessGetDirectories,
     STATISTICS_ID_VMMDLL_ProcessGetSections,
     STATISTICS_ID_VMMDLL_ProcessGetProcAddress,
@@ -80,6 +83,7 @@ typedef enum tdSTATISTICS_ID {
     STATISTICS_ID_VMMDLL_WinReg_EnumKeyExW,
     STATISTICS_ID_VMMDLL_WinReg_EnumValueW,
     STATISTICS_ID_VMMDLL_WinReg_QueryValueEx,
+    STATISTICS_ID_VMMDLL_YaraSearch,
     STATISTICS_ID_VMMDLL_PdbLoad,
     STATISTICS_ID_VMMDLL_PdbSymbolName,
     STATISTICS_ID_VMMDLL_PdbSymbolAddress,
@@ -101,6 +105,8 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_PluginManager_FcTimeline]        = "PluginManager_FcTimeline",
     [STATISTICS_ID_PluginManager_FcLogCSV]          = "PluginManager_FcLogCSV",
     [STATISTICS_ID_PluginManager_FcLogJSON]         = "PluginManager_FcLogJSON",
+    [STATISTICS_ID_PluginManager_FcFindEvil]        = "PluginManager_FcFindEvil",
+    [STATISTICS_ID_PluginManager_FcIngestObject]    = "PluginManager_FcIngestObject",
     [STATISTICS_ID_PluginManager_FcIngestPhysmem]   = "PluginManager_FcIngestPhysmem",
     [STATISTICS_ID_PluginManager_FcIngestVirtmem]   = "PluginManager_FcIngestVirtmem",
     [STATISTICS_ID_PluginManager_FcIngestFinalize]  = "PluginManager_FcIngestFinalize",
@@ -144,6 +150,7 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_VMMDLL_Map_GetVM]                = "MMDLL_Map_GetVM",
     [STATISTICS_ID_VMMDLL_Map_GetServices]          = "VMMDLL_Map_GetServices",
     [STATISTICS_ID_VMMDLL_Map_GetPfn]               = "VMMDLL_Map_GetPfn",
+    [STATISTICS_ID_VMMDLL_Map_GetPfnEx]             = "VMMDLL_Map_GetPfnEx",
     [STATISTICS_ID_VMMDLL_ProcessGetDirectories]    = "VMMDLL_ProcessGetDirectories",
     [STATISTICS_ID_VMMDLL_ProcessGetSections]       = "VMMDLL_ProcessGetSections",
     [STATISTICS_ID_VMMDLL_ProcessGetProcAddress]    = "VMMDLL_ProcessGetProcAddress",
@@ -162,6 +169,7 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
     [STATISTICS_ID_VMMDLL_VmMemReadScatter]         = "VMMDLL_VmMemReadScatter",
     [STATISTICS_ID_VMMDLL_VmMemWrite]               = "VMMDLL_VmMemWrite",
     [STATISTICS_ID_VMMDLL_VmMemWriteScatter]        = "VMMDLL_VmMemWriteScatter",
+    [STATISTICS_ID_VMMDLL_YaraSearch]               = "STATISTICS_ID_VMMDLL_YaraSearch",
     [STATISTICS_ID_VMMDLL_PdbLoad]                  = "VMMDLL_PdbLoad",
     [STATISTICS_ID_VMMDLL_PdbSymbolName]            = "VMMDLL_PdbSymbolName",
     [STATISTICS_ID_VMMDLL_PdbSymbolAddress]         = "VMMDLL_PdbSymbolAddress",
@@ -174,6 +182,15 @@ static LPCSTR STATISTICS_ID_STR[STATISTICS_ID_MAX] = {
 VOID Statistics_CallSetEnabled(_In_ VMM_HANDLE H, _In_ BOOL fEnabled);
 BOOL Statistics_CallGetEnabled(_In_ VMM_HANDLE H);
 QWORD Statistics_CallStart(_In_ VMM_HANDLE H);
+
+/*
+* Log the completion of a statistics-measured function call.
+* Log the time spend in the call and return it.
+* -- H
+* -- fId
+* -- tmCallStart
+* -- return = time spend in call in ticks of QueryPerformanceCounter()
+*/
 QWORD Statistics_CallEnd(_In_ VMM_HANDLE H, _In_ DWORD fId, QWORD tmCallStart);
 
 /*
@@ -197,7 +214,7 @@ BOOL Statistics_CallToString(_In_ VMM_HANDLE H, _Out_opt_ LPSTR *psz, _Out_ PDWO
 typedef struct tdVMMSTATISTICS_LOG {
     BOOL f;
     DWORD dwPID;
-    DWORD dwMID;
+    DWORD MID;
     VMMLOG_LEVEL dwLogLevel;
     QWORD v[3];
 } VMMSTATISTICS_LOG, *PVMMSTATISTICS_LOG;
@@ -205,13 +222,13 @@ typedef struct tdVMMSTATISTICS_LOG {
 /*
 * Start a call statistics logging session.
 * -- H
-* -- dwMID = module ID (MID)
+* -- MID = module ID (MID)
 * -- dwLogLevel = log level as defined by LOGLEVEL_*
 * -- pProcess
 * -- pLogStatistics
 * -- uszText
 */
-VOID VmmStatisticsLogStart(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPSTR uszText);
+VOID VmmStatisticsLogStart(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel, _In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPCSTR uszText);
 
 /*
 * End a statistics logging session.
@@ -219,6 +236,6 @@ VOID VmmStatisticsLogStart(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVE
 * -- pLogStatistics
 * -- uszText
 */
-VOID VmmStatisticsLogEnd(_In_ VMM_HANDLE H, _In_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPSTR uszText);
+VOID VmmStatisticsLogEnd(_In_ VMM_HANDLE H, _In_ PVMMSTATISTICS_LOG pStatisticsLog, _In_ LPCSTR uszText);
 
 #endif /* __STATISTICS_H__ */

@@ -1,6 +1,6 @@
 // vmmpyc.h : definitions related to the MemProcFS/VMM Python API
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __VMMPYC_H__
@@ -26,9 +26,13 @@
 #endif /* _WIN32 */
 #ifdef LINUX
 
+#include <pthread.h>
 #include <netinet/in.h>
+#include <strings.h>
 
 #define EXPORTED_FUNCTION                   __attribute__((visibility("default")))
+
+typedef void                                VOID, *PVOID, *LPVOID;
 typedef uint32_t                            BOOL, *PBOOL;
 typedef char                                CHAR, *PCHAR, *PSTR, *LPSTR;
 typedef uint64_t                            LARGE_INTEGER, *PLARGE_INTEGER, ULONGLONG, FILETIME, *PFILETIME;
@@ -71,16 +75,31 @@ typedef struct _SYSTEMTIME {
 #define min(a, b)                           (((a) < (b)) ? (a) : (b))
 #define _countof(_Array)                    (sizeof(_Array) / sizeof(_Array[0]))
 #define ZeroMemory(pb, cb)                  (memset(pb, 0, cb))
+#define _stricmp(s1, s2)                    (strcasecmp(s1, s2))
 #define strcpy_s(dst, len, src)             (strncpy(dst, src, len))
 #define strncpy_s(dst, len, src, srclen)    (strncpy(dst, src, min((QWORD)(max(1, len)) - 1, (QWORD)(srclen))))
 #define sprintf_s(s, maxcount, ...)         (snprintf(s, maxcount, __VA_ARGS__))
 #define _snprintf_s(s,l,c,...)              (snprintf(s,min((QWORD)(l), (QWORD)(c)),__VA_ARGS__))
+#define SwitchToThread()                    (sched_yield())
+#define WINAPI
 
 // linux functions defined in oscompatibility.c
 HANDLE LocalAlloc(DWORD uFlags, SIZE_T uBytes);
 VOID LocalFree(HANDLE hMem);
 BOOL FileTimeToSystemTime(_In_ PFILETIME lpFileTime, _Out_ PSYSTEMTIME lpSystemTime);
 DWORD GetModuleFileNameA(_In_opt_ HMODULE hModule, _Out_ LPSTR lpFilename, _In_ DWORD nSize);
+
+// thread functionality:
+HANDLE CreateThread(
+    PVOID    lpThreadAttributes,
+    SIZE_T   dwStackSize,
+    PVOID    lpStartAddress,
+    PVOID    lpParameter,
+    DWORD    dwCreationFlags,
+    PDWORD   lpThreadId
+);
+
+BOOL CloseHandle(_In_ HANDLE hObject);
 
 #endif /* LINUX */
 
@@ -102,6 +121,7 @@ typedef struct tdPyObj_Vmm {
     BOOL fVmmCoreOpenType;      // original open = TRUE, existing open = FALSE
     PyObject *pyObjVfs;
     PyObject *pyObjKernel;
+    PyObject *pyObjMaps;
     PyObject *pyObjMemory;
     VMM_HANDLE hVMM;
 } PyObj_Vmm;
@@ -141,11 +161,40 @@ typedef struct tdPyObj_ScatterMemory {
     VMMDLL_SCATTER_HANDLE hScatter;
 } PyObj_ScatterMemory;
 
+#define PYOBJ_SEARCH_MAXENTRIES     1024
+
+typedef struct tdPyObj_Search {
+    PyObject_HEAD
+    BOOL fValid;
+    PyObj_Vmm *pyVMM;
+    DWORD dwPID;
+    BOOL fStarted;
+    BOOL fCompleted;
+    BOOL fCompletedSuccess;
+    VMMDLL_MEM_SEARCH_CONTEXT ctxSearch;
+    PyObject *pyListResult;
+    VMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY peSearch[PYOBJ_SEARCH_MAXENTRIES];
+} PyObj_Search;
+
+typedef struct tdPyObj_Yara {
+    PyObject_HEAD
+    BOOL fValid;
+    PyObj_Vmm *pyVMM;
+    DWORD dwPID;
+    BOOL fStarted;
+    BOOL fCompleted;
+    BOOL fCompletedSuccess;
+    VMMDLL_YARA_CONFIG ctxYara;
+    LPSTR uszMultiRules;
+    PyObject *pyListResult;
+} PyObj_Yara;
+
 typedef struct tdPyObj_Module {
     PyObject_HEAD
     BOOL fValid;
     PyObj_Vmm *pyVMM;
     DWORD dwPID;
+    PyObject *pyObjMapsOpt;
     VMMDLL_MAP_MODULEENTRY ModuleEntry;
     CHAR uszText[64];
     CHAR uszFullName[128];
@@ -173,6 +222,8 @@ typedef struct tdPyObj_Process {
     PyObj_Vmm *pyVMM;
     DWORD dwPID;
     BOOL fValidInfo;
+    PyObject *pyObjMapsOpt;
+    PyObject *pyObjMemoryOpt;
     VMMDLL_PROCESS_INFORMATION Info;
 } PyObj_Process;
 
@@ -292,6 +343,8 @@ _Success_(return) BOOL VmmPycScatterMemory_InitializeType(PyObject *pModule);
 _Success_(return) BOOL VmmPycVirtualMemory_InitializeType(PyObject *pModule);
 _Success_(return) BOOL VmmPycVirtualMachine_InitializeType(PyObject *pModule);
 _Success_(return) BOOL VmmPycRegMemory_InitializeType(PyObject *pModule);
+_Success_(return) BOOL VmmPycSearch_InitializeType(PyObject *pModule);
+_Success_(return) BOOL VmmPycYara_InitializeType(PyObject *pModule);
 
 PyObj_Pdb* VmmPycPdb_InitializeInternal1(_In_ PyObj_Vmm *pyVMM, _In_ DWORD dwPID, _In_ QWORD vaModuleBase);
 PyObj_Pdb* VmmPycPdb_InitializeInternal2(_In_ PyObj_Vmm *pyVMM, _In_ LPSTR szModule);
@@ -311,9 +364,14 @@ PyObj_RegMemory* VmmPycRegMemory_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_ 
 PyObj_RegKey* VmmPycRegKey_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_ LPSTR uszFullPathKey, _In_ BOOL fVerify);
 PyObj_RegValue* VmmPycRegValue_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_ LPSTR uszFullPathKeyValue, _In_ BOOL fVerify);
 PyObj_Vmm *VmmPycVmm_InitializeInternal2(_In_ PyObj_Vmm *pyVMM, _In_ VMM_HANDLE hVMM);
+PyObj_Search *VmmPycSearch_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_opt_ DWORD dwPID, _In_ PyObject *args);
+PyObj_Yara *VmmPycYara_InitializeInternal(_In_ PyObj_Vmm *pyVMM, _In_opt_ DWORD dwPID, _In_ PyObject *args);
 
+DWORD VmmPyc_MemReadType_TypeCheck(_In_ PyObject *pyUnicodeTp, _Out_ PDWORD pcbTp);
+PyObject* VmmPyc_MemReadType_TypeGet(_In_ DWORD tp, _In_ PBYTE pb);
 PyObject* VmmPyc_MemReadScatter(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ LPSTR szFN, PyObject *args);
 PyObject* VmmPyc_MemRead(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ LPSTR szFN, PyObject *args);
 PyObject* VmmPyc_MemWrite(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ LPSTR szFN, PyObject *args);
+PyObject* VmmPyc_MemReadType(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ LPSTR szFN, PyObject *args);
 
 #endif /* __VMMPYC_H__ */

@@ -1,8 +1,25 @@
 // oscompatibility.c : VMM Windows/Linux compatibility layer.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
+
+#ifdef _WIN32
+
+#include "oscompatibility.h"
+#include "charutil.h"
+
+_Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName)
+{
+    WCHAR wszLibFileName[MAX_PATH * 2];
+    if(CharUtil_UtoW(lpLibFileName, -1, (PBYTE)wszLibFileName, sizeof(wszLibFileName), NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY)) {
+        return LoadLibraryW(wszLibFileName);
+    }
+    return NULL;
+}
+
+#endif
+
 #ifdef LINUX
 
 #include "oscompatibility.h"
@@ -17,7 +34,8 @@
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-VMMFN_RtlDecompressBuffer OSCOMPAT_RtlDecompressBuffer;
+VMMFN_RtlDecompressBuffer   OSCOMPAT_RtlDecompressBuffer;
+VMMFN_RtlDecompressBufferEx OSCOMPAT_RtlDecompressBufferEx;
 
 // ----------------------------------------------------------------------------
 // LocalAlloc/LocalFree BELOW:
@@ -46,19 +64,22 @@ FARPROC GetProcAddress(_In_opt_ HMODULE hModule, _In_ LPSTR lpProcName)
     if(!strcmp(lpProcName, "RtlDecompressBuffer")) {
         return OSCOMPAT_RtlDecompressBuffer;
     }
+    if(!strcmp(lpProcName, "RtlDecompressBufferEx")) {
+        return OSCOMPAT_RtlDecompressBufferEx;
+    }
     if(hModule && ((SIZE_T)hModule & 0xfff)) {
         return dlsym(hModule, lpProcName);
     } 
     return NULL;
 }
 
-HMODULE LoadLibraryA(LPSTR lpFileName)
+_Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName)
 {
-    if(!strcmp(lpFileName, "ntdll.dll")) {
+    if(!strcmp(lpLibFileName, "ntdll.dll")) {
         return (HMODULE)0x1000;      // FAKE HMODULE
     }
-    if(lpFileName[0] == '/') {
-        return dlopen(lpFileName, RTLD_NOW);
+    if(lpLibFileName[0] == '/') {
+        return dlopen(lpLibFileName, RTLD_NOW);
     }
     return 0;
 }
@@ -114,6 +135,31 @@ HMODULE GetModuleHandleA(_In_opt_ LPCSTR lpModuleName)
     info.lpModuleName = lpModuleName;
     dl_iterate_phdr(GetModuleHandleA_CB, (void*)&info);
     return info.hModule;
+}
+
+// ----------------------------------------------------------------------------
+// STRING OPERATIONS BELOW:
+// ----------------------------------------------------------------------------
+
+int strncpy_s(char *dst, size_t dst_size, const char *src, size_t count)
+{
+    size_t src_length;
+    if(!dst || !src) { return -1; }
+    if(dst_size == 0) { return -2; }
+    src_length = strlen(src);
+    if(count == (size_t)-1 /* _TRUNCATE */) {
+        if(src_length >= dst_size) {
+            count = dst_size - 1;
+        } else {
+            count = src_length;
+        }
+    } else if(src_length < count) {
+        count = src_length;
+    }
+    if(count >= dst_size) { return -3; }
+    strncpy(dst, src, count);
+    dst[count] = '\0';
+    return 0;
 }
 
 // ----------------------------------------------------------------------------
@@ -426,7 +472,7 @@ BOOL AcquireSRWLockExclusive_Try(_Inout_ PSRWLOCK SRWLock)
 {
     DWORD dwZero = 0;
     __sync_fetch_and_add_4(&SRWLock->c, 1);
-    if(atomic_compare_exchange_strong(&SRWLock->xchg, &dwZero, 1)) {
+    if(atomic_compare_exchange_strong((atomic_uint*)&SRWLock->xchg, &dwZero, 1)) {
         return TRUE;
     }
     __sync_sub_and_fetch_4(&SRWLock->c, 1);
@@ -439,7 +485,7 @@ VOID AcquireSRWLockExclusive(_Inout_ PSRWLOCK SRWLock)
     __sync_fetch_and_add_4(&SRWLock->c, 1);
     while(TRUE) {
         dwZero = 0;
-        if(atomic_compare_exchange_strong(&SRWLock->xchg, &dwZero, 1)) {
+        if(atomic_compare_exchange_strong((atomic_uint*)&SRWLock->xchg, &dwZero, 1)) {
             return;
         }
         futex(&SRWLock->xchg, FUTEX_WAIT, 1, NULL, NULL, 0);
@@ -454,7 +500,7 @@ BOOL AcquireSRWLockExclusive_Timeout(_Inout_ PSRWLOCK SRWLock, _In_ DWORD dwMill
     __sync_fetch_and_add_4(&SRWLock->c, 1);
     while(TRUE) {
         dwZero = 0;
-        if(atomic_compare_exchange_strong(&SRWLock->xchg, &dwZero, 1)) {
+        if(atomic_compare_exchange_strong((atomic_uint*)&SRWLock->xchg, &dwZero, 1)) {
             return TRUE;
         }
         if((dwMilliseconds != 0) && (dwMilliseconds != 0xffffffff)) {
@@ -476,7 +522,7 @@ BOOL AcquireSRWLockExclusive_Timeout(_Inout_ PSRWLOCK SRWLock, _In_ DWORD dwMill
 VOID ReleaseSRWLockExclusive(_Inout_ PSRWLOCK SRWLock)
 {
     DWORD dwOne = 1;
-    if(atomic_compare_exchange_strong(&SRWLock->xchg, &dwOne, 0)) {
+    if(atomic_compare_exchange_strong((atomic_uint*)&SRWLock->xchg, &dwOne, 0)) {
         if(__sync_sub_and_fetch_4(&SRWLock->c, 1)) {
             futex(&SRWLock->xchg, FUTEX_WAKE, 1, NULL, NULL, 0);
         }
@@ -663,7 +709,7 @@ NTSTATUS OSCOMPAT_RtlDecompressBuffer(USHORT CompressionFormat, PUCHAR Uncompres
     static BOOL fFirst = TRUE;
     static SRWLOCK LockSRW = SRWLOCK_INIT;
     static int(*pfn_xpress_decompress)(PBYTE pbIn, SIZE_T cbIn, PBYTE pbOut, SIZE_T *pcbOut) = NULL;
-    if(CompressionFormat != 3) { return VMM_STATUS_UNSUCCESSFUL; } // 3 == COMPRESS_ALGORITHM_XPRESS
+    if(CompressionFormat != COMPRESSION_FORMAT_XPRESS) { return VMM_STATUS_UNSUCCESSFUL; }
     if(fFirst) {
         AcquireSRWLockExclusive(&LockSRW);
         if(fFirst) {
@@ -679,6 +725,51 @@ NTSTATUS OSCOMPAT_RtlDecompressBuffer(USHORT CompressionFormat, PUCHAR Uncompres
     if(pfn_xpress_decompress) {
         cbOut = UncompressedBufferSize;
         rc = pfn_xpress_decompress(CompressedBuffer, CompressedBufferSize, UncompressedBuffer, &cbOut);
+        if(rc == 0) {
+            *FinalUncompressedSize = cbOut;
+            return VMM_STATUS_SUCCESS;
+        }
+    }
+    return VMM_STATUS_UNSUCCESSFUL;
+}
+
+/*
+* Linux implementation of ntdll!RtlDecompressBuffer for COMPRESS_ALGORITHM_XPRESS:
+* Dynamically load libMSCompression.so (if it exists) and use it. If library does
+* not exist then fail gracefully (i.e. don't support XPRESS decompress).
+* https://github.com/coderforlife/ms-compress   (License: GPLv3)
+*/
+NTSTATUS OSCOMPAT_RtlDecompressBufferEx(USHORT CompressionFormat, PUCHAR UncompressedBuffer, ULONG  UncompressedBufferSize, PUCHAR CompressedBuffer, ULONG  CompressedBufferSize, PULONG FinalUncompressedSize, PVOID pv)
+{
+    int rc;
+    void *lib_mscompress;
+    SIZE_T cbOut;
+    static BOOL fFirst = TRUE;
+    static SRWLOCK LockSRW = SRWLOCK_INIT;
+    static int(*pfn_xpress_decompress)(PBYTE pbIn, SIZE_T cbIn, PBYTE pbOut, SIZE_T *pcbOut) = NULL;
+    static int(*pfn_xpress_decompress_huff)(PBYTE pbIn, SIZE_T cbIn, PBYTE pbOut, SIZE_T *pcbOut) = NULL;
+    CHAR szPathLib[MAX_PATH] = { 0 };
+    Util_GetPathLib(szPathLib);
+    strncat_s(szPathLib, sizeof(szPathLib), "libMSCompression.so", _TRUNCATE);
+    if((CompressionFormat != COMPRESSION_FORMAT_XPRESS) && (CompressionFormat != COMPRESSION_FORMAT_XPRESS_HUFF)) { return VMM_STATUS_UNSUCCESSFUL; }
+    if(fFirst) {
+        AcquireSRWLockExclusive(&LockSRW);
+        if(fFirst) {
+            fFirst = FALSE;
+            lib_mscompress = dlopen(szPathLib, RTLD_NOW);
+            if(lib_mscompress) {
+                pfn_xpress_decompress = (int(*)(PBYTE, SIZE_T, PBYTE, SIZE_T *))dlsym(lib_mscompress, "xpress_decompress");
+                pfn_xpress_decompress_huff = (int(*)(PBYTE, SIZE_T, PBYTE, SIZE_T *))dlsym(lib_mscompress, "xpress_huff_decompress");
+            }
+        }
+        ReleaseSRWLockExclusive(&LockSRW);
+    }
+    *FinalUncompressedSize = 0;
+    if(pfn_xpress_decompress && pfn_xpress_decompress_huff) {
+        cbOut = UncompressedBufferSize;
+        rc = (CompressionFormat == 4) ?
+            pfn_xpress_decompress_huff(CompressedBuffer, CompressedBufferSize, UncompressedBuffer, &cbOut) :
+            pfn_xpress_decompress(CompressedBuffer, CompressedBufferSize, UncompressedBuffer, &cbOut);
         if(rc == 0) {
             *FinalUncompressedSize = cbOut;
             return VMM_STATUS_SUCCESS;

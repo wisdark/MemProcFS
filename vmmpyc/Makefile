@@ -3,18 +3,18 @@ CFLAGS= -I. -I../includes -D LINUX  -L. -l:vmm.so -shared -fPIC -fvisibility=hid
 # DEBUG FLAGS BELOW
 # CFLAGS  += -g -O0 -Wextra -Wno-unused-parameter -Wno-cast-function-type
 # DEBUG FLAGS ABOVE
-CFLAGS  += -fPIE -fPIC -pie -fstack-protector -D_FORTIFY_SOURCE=2 -O1 -Wl,-z,noexecstack
+CFLAGS  += -fPIE -fPIC -pie -fstack-protector-strong -D_FORTIFY_SOURCE=2 -O1 -Wl,-z,noexecstack
 CFLAGS  += -Wall -Wno-format-truncation -Wno-enum-compare -Wno-pointer-sign -Wno-multichar -Wno-unused-variable -Wno-unused-value
-CFLAGS  += -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+CFLAGS  += -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -Wno-multichar
 LDFLAGS += -L../files -Wl,-rpath,'$$ORIGIN' -g -ldl -shared
 DEPS = 
-OBJ = oscompatibility.c vmmpycplugin.c vmmpyc.c                               \
-      vmmpyc_maps.c vmmpyc_process.c vmmpyc_regvalue.c vmmpyc_virtualmemory.c \
-	  vmmpyc_module.c vmmpyc_processmaps.c vmmpyc_scattermemory.c             \
-	  vmmpyc_vmm.c version.h vmmpyc_modulemaps.c vmmpyc_reghive.c             \
-	  vmmpyc_util.c vmmpyc_pdb.c vmmpyc_regkey.c vmmpyc_vfs.c vmmpyc.h        \
-	  vmmpyc_kernel.c vmmpyc_physicalmemory.c vmmpyc_regmemory.c              \
-	  vmmpyc_virtualmachine.c
+OBJ = oscompatibility.o vmmpycplugin.o vmmpyc.o                               \
+      vmmpyc_maps.o vmmpyc_process.o vmmpyc_regvalue.o vmmpyc_virtualmemory.o \
+	  vmmpyc_module.o vmmpyc_processmaps.o vmmpyc_scattermemory.o             \
+	  vmmpyc_vmm.o vmmpyc_modulemaps.o vmmpyc_reghive.o                       \
+	  vmmpyc_util.o vmmpyc_pdb.o vmmpyc_regkey.o vmmpyc_vfs.o vmmpyc.o        \
+	  vmmpyc_kernel.o vmmpyc_physicalmemory.o vmmpyc_regmemory.o              \
+	  vmmpyc_search.o vmmpyc_virtualmachine.o vmmpyc_yara.o
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)

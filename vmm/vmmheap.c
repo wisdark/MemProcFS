@@ -10,7 +10,7 @@
 // The segment heap is reliant on symbols and it will not be possible to parse
 // without symbols.s
 //
-// (c) Ulf Frisk, 2022-2023
+// (c) Ulf Frisk, 2022-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -743,7 +743,7 @@ VOID VmmHeapAlloc_NtInitSeg(_In_ VMM_HANDLE H, _In_ PVMMHEAPNT_CTX ctx, _In_ QWO
             VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "FAIL: (PREVSIZE) AT: %llx %x", vaSegment, oEntry);
             break;
         }
-        cbAlloc = (eH.Size - 1) * cbUnitSize - eH.UnusedBytes;
+        cbAlloc = eH.Size * cbUnitSize - eH.UnusedBytes;
         if((eH.Flags & 1) && cbAlloc && (cbAlloc < 0x01000000)) {
             if(eH.Flags & 8) {
                 // internal: potential lfh
@@ -1317,14 +1317,14 @@ VOID VmmHeap_Initialize_DoWork(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
         goto fail;
     }
     // fetch data:
-    if((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X86) || ((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X64) && pProcess->win.fWow64)) {
+    if((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_32) || ((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_64) && pProcess->win.fWow64)) {
         if(!H->vmm.offset.HEAP32.fValid) { goto fail; }
         ctxInit.po = &H->vmm.offset.HEAP32;
         ctxInit.f32 = TRUE;
         VmmHeap_InitializeInternal(H, &ctxInit, TRUE);
         ObSet_Clear(ctxInit.psPrefetch);
     }
-    if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X64) {
+    if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_64) {
         if(!H->vmm.offset.HEAP64.fValid) { goto fail; }
         ctxInit.po = &H->vmm.offset.HEAP64;
         ctxInit.f32 = FALSE;

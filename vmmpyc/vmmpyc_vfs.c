@@ -1,6 +1,6 @@
 // vmmpyc_vfs.c : implementation of virtual file system (vfs) functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -28,7 +28,7 @@ LPSTR Util_ReplaceSlashAlloc(_In_opt_ LPSTR usz)
     return uszDst;
 }
 
-VOID VmmPycVfs_list_AddInternal(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_ ULONG64 size, _In_ BOOL fIsDirectory)
+VOID VmmPycVfs_list_AddInternal(_Inout_ HANDLE h, _In_ LPCSTR uszName, _In_ ULONG64 size, _In_ BOOL fIsDirectory)
 {
     DWORD i = 0;
     PVMMPYCVFS_LIST pE;
@@ -46,12 +46,12 @@ VOID VmmPycVfs_list_AddInternal(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_ ULONG
     }
 }
 
-VOID VmmPycVfs_list_AddFile(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_ ULONG64 size, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
+VOID VmmPycVfs_list_AddFile(_Inout_ HANDLE h, _In_ LPCSTR uszName, _In_ ULONG64 size, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
 {
     VmmPycVfs_list_AddInternal(h, uszName, size, FALSE);
 }
 
-VOID VmmPycVfs_list_AddDirectory(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
+VOID VmmPycVfs_list_AddDirectory(_Inout_ HANDLE h, _In_ LPCSTR uszName, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
 {
     VmmPycVfs_list_AddInternal(h, uszName, 0, TRUE);
 }
@@ -113,7 +113,7 @@ VmmPycVfs_read(PyObj_Vfs *self, PyObject *args)
     PBYTE pb;
     LPSTR uszPathPython = NULL, uszPath;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vfs.read(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "s|kK", &uszPathPython, &cb, &cbOffset)) {
+    if(!PyArg_ParseTuple(args, "s|IK", &uszPathPython, &cb, &cbOffset)) {
         return PyErr_Format(PyExc_RuntimeError, "Vfs.read(): Illegal argument.");
     }
     if(cb > 0x10000000) {
@@ -139,7 +139,7 @@ static PyObject*
 VmmPycVfs_write(PyObj_Vfs *self, PyObject *args)
 {
     BOOL result;
-    QWORD cb;
+    SIZE_T cb;
     DWORD cbWritten;
     ULONG64 cbOffset;
     PBYTE pb;
@@ -196,7 +196,8 @@ static void
 VmmPycVfs_dealloc(PyObj_Vfs *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)

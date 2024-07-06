@@ -1,6 +1,6 @@
 // util.h : definitions of various utility functions.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __UTIL_H__
@@ -35,7 +35,7 @@ DWORD Util_GetNumDigits(_In_ DWORD dwNumber);
 * -- sz
 * -- return
 */
-QWORD Util_GetNumericA(_In_ LPSTR sz);
+QWORD Util_GetNumericA(_In_ LPCSTR sz);
 
 /*
 * SHA256 hash data.
@@ -48,10 +48,43 @@ _Success_(return)
 BOOL Util_HashSHA256(_In_reads_(cbData) PBYTE pbData, _In_ DWORD cbData, _Out_writes_(32) PBYTE pbHash);
 
 /*
+* GZIP decompresses a buffer of known length.
+* NOTE! Function does not guarantee that the buffer is null-terminated.
+* -- cbCompressed = binary gzipped data.
+* -- cbCompressed = length of gzipped data.
+* -- cbDecompressed = length of decompressed data. NB! must exactly match the length of the decompressed data.
+* -- pbDecompressed = buffer to store decompressed data.
+* -- return
+*/
+_Success_(return)
+BOOL Util_DecompressGz(_In_ PBYTE pbCompressed, _In_ DWORD cbCompressed, _In_ DWORD cbDecompressed, _Out_writes_(cbDecompressed) PBYTE pbDecompressed);
+
+/*
+* GZIP decompresses a buffer of known length and allocated the decompressed
+* data into a null-terminated string.
+* CALLER LocalFree: *pszDecompressed
+* -- pbCompressed = binary gzipped data.
+* -- cbCompressed = length of gzipped data.
+* -- cbDecompressed = length of decompressed data (excl. null terminator).
+* -- pszDecompressed
+* -- return
+*/
+_Success_(return)
+BOOL Util_DecompressGzToStringAlloc(_In_ PBYTE pbCompressed, _In_ DWORD cbCompressed, _In_ DWORD cbDecompressed, _Out_ LPSTR *pszDecompressed);
+
+/*
 * Delete a file denoted by its utf-8 full path.
 * -- uszPathFile
 */
-VOID Util_DeleteFileU(_In_ LPSTR uszPathFile);
+VOID Util_DeleteFileU(_In_ LPCSTR uszPathFile);
+
+/*
+* Utility function to check whether a buffer is zeroed.
+* -- pb
+* -- cb
+* -- return
+*/
+BOOL Util_IsZeroBuffer(_In_ PBYTE pb, _In_ DWORD cb);
 
 /*
 * Fill a human readable hex ascii memory dump into the caller supplied sz buffer.
@@ -72,12 +105,30 @@ BOOL Util_FillHexAscii(
 );
 
 /*
+* Fill a human readable hex ascii memory dump into the caller supplied sz buffer.
+* -- pb = bytes (may only be NULL if sz is NULL for size query).
+* -- cb
+* -- qwAddress = the start address in the address column.
+* -- sz = buffer to fill, NULL to retrieve buffer size in pcsz parameter.
+* -- pcsz = IF sz==NULL :: size of buffer (including space for terminating NULL) on exit
+*           IF sz!=NULL :: size of buffer on entry, size of characters (excluding terminating NULL) on exit.
+*/
+_Success_(return)
+BOOL Util_FillHexAscii_WithAddress(
+    _In_reads_opt_(cb) PBYTE pb,
+    _In_ DWORD cb,
+    _In_ QWORD qwAddress,
+    _Out_writes_opt_(*pcsz) LPSTR sz,
+    _Inout_ PDWORD pcsz
+);
+
+/*
 * Replaces ascii characters not allowed in file names in the NULL-terminated
 * string sz.
 * -- sz
 * -- chDefault
 */
-VOID Util_AsciiFileNameFix(_In_ LPSTR sz, _In_ CHAR chDefault);
+VOID Util_AsciiFileNameFix(_Inout_ LPSTR sz, _In_ CHAR chDefault);
 
 /*
 * Prepend a path with a hexascii address value.
@@ -86,7 +137,7 @@ VOID Util_AsciiFileNameFix(_In_ LPSTR sz, _In_ CHAR chDefault);
 * -- f32
 * -- uszText
 */
-VOID Util_PathPrependVA(_Out_writes_(MAX_PATH) LPSTR uszDstBuffer, _In_ QWORD va, _In_ BOOL f32, _In_ LPSTR uszText);
+VOID Util_PathPrependVA(_Out_writes_(MAX_PATH) LPSTR uszDstBuffer, _In_ QWORD va, _In_ BOOL f32, _In_ LPCSTR uszText);
 
 /*
 * snprintf to a utf-8. The result is guaranteed to be NULL terminated.
@@ -100,7 +151,7 @@ _Success_(return >= 0)
 size_t Util_usnprintf_ln(
     _Out_writes_(cszLineLength + 1) LPSTR uszBuffer,
     _In_ QWORD cszLineLength,
-    _In_z_ _Printf_format_string_ LPSTR uszFormat,
+    _In_z_ _Printf_format_string_ LPCSTR uszFormat,
     ...
 );
 
@@ -124,7 +175,7 @@ VOID Util_GetPathLib(_Out_writes_(MAX_PATH) PCHAR szPath);
 * -- sz/wsz
 * -- return fail: null, success: duplicated string - caller responsible for free with LocalFree()
 */
-LPSTR Util_StrDupA(_In_opt_ LPSTR sz);
+LPSTR Util_StrDupA(_In_opt_ LPCSTR sz);
 
 /*
 * Retrieve the current time as FILETIME.
@@ -223,7 +274,7 @@ NTSTATUS Util_VfsReadFile_FromDWORD(_In_ DWORD dwValue, _Out_writes_to_(cb, *pcb
 NTSTATUS Util_VfsReadFile_FromBOOL(_In_ BOOL fValue, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromFILETIME(_In_ QWORD ftValue, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsReadFile_FromResource(_In_ VMM_HANDLE H, _In_ LPWSTR wszResourceName, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset);
-NTSTATUS Util_VfsReadFile_usnprintf_ln(_Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset, _In_ QWORD cszLineLength, _In_z_ _Printf_format_string_ LPSTR uszFormat, ...);
+NTSTATUS Util_VfsReadFile_usnprintf_ln(_Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset, _In_ QWORD cszLineLength, _In_z_ _Printf_format_string_ LPCSTR uszFormat, ...);
 NTSTATUS Util_VfsWriteFile_BOOL(_Inout_ PBOOL pfTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsWriteFile_09(_Inout_ PDWORD pdwTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset);
 NTSTATUS Util_VfsWriteFile_DWORD(_Inout_ PDWORD pdwTarget, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ QWORD cbOffset, _In_ DWORD dwMinAllow, _In_opt_ DWORD dwMaxAllow);
@@ -243,7 +294,7 @@ VOID Util_VfsTimeStampFile(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _O
 * -- return
 */
 _Success_(return)
-BOOL Util_VfsHelper_GetIdDir(_In_ LPSTR uszPath, _In_ BOOL fHex, _Out_ PDWORD pdwID, _Out_opt_ LPSTR *puszSubPath);
+BOOL Util_VfsHelper_GetIdDir(_In_ LPCSTR uszPath, _In_ BOOL fHex, _Out_ PDWORD pdwID, _Out_opt_ LPCSTR *puszSubPath);
 
 #define UTIL_VFSLINEFIXED_LINECOUNT(H, c)                  (c + (H->cfg.fFileInfoHeader ? 2ULL : 0ULL))
 #define UTIL_VFSLINEVARIABLE_BYTECOUNT(H, c, pdwo, szHdr)  ((c ? (pdwo[c - 1]) : 0) + (H->cfg.fFileInfoHeader ? 2 * strlen(szHdr) + 2 : 0ULL))
@@ -289,7 +340,7 @@ NTSTATUS Util_VfsLineVariable_Read(
     _In_ VMM_HANDLE H,
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID pMap,
     _In_ DWORD cMap,
     _In_ DWORD cbEntry,
@@ -322,7 +373,7 @@ NTSTATUS Util_VfsLineFixed_Read(
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
     _In_ DWORD cbLineLength,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID pMap,
     _In_ DWORD cMap,
     _In_ DWORD cbEntry,
@@ -367,7 +418,7 @@ NTSTATUS Util_VfsLineFixedMapCustom_Read(
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
     _In_ DWORD cbLineLength,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID ctxMap,
     _In_ DWORD cMap,
     _In_ UTIL_VFSLINEFIXED_MAP_PFN_CB pfnMap,

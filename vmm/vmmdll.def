@@ -45,6 +45,7 @@ EXPORTS
     VMMDLL_Scatter_Prepare
     VMMDLL_Scatter_PrepareEx
     VMMDLL_Scatter_PrepareWrite
+    VMMDLL_Scatter_PrepareWriteEx
     VMMDLL_Scatter_Execute
     VMMDLL_Scatter_ExecuteRead
     VMMDLL_Scatter_Read
@@ -56,6 +57,7 @@ EXPORTS
     VMMDLL_Map_GetNetU
     VMMDLL_Map_GetNetW
     VMMDLL_Map_GetPfn
+    VMMDLL_Map_GetPfnEx
     VMMDLL_Map_GetPool
     VMMDLL_Map_GetPhysMem
     VMMDLL_Map_GetUsersU
@@ -125,6 +127,7 @@ EXPORTS
     
     VMMDLL_ForensicFileAppend
     VMMDLL_UtilFillHexAscii
+    VMMDLL_YaraSearch
 
     VMMDLL_Log
     VMMDLL_LogEx

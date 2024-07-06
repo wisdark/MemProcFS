@@ -1,7 +1,7 @@
 // vmmwin.c : implementation related to operating system and process
 // parsing of virtual memory. Windows related features only.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -13,7 +13,7 @@
 #include "util.h"
 #include "pdb.h"
 #include "pe.h"
-#include "mm.h"
+#include "mm/mm.h"
 #include "infodb.h"
 #include "statistics.h"
 #ifdef _WIN32
@@ -145,6 +145,7 @@ PVMMOB_MAP_EAT VmmWinEAT_Initialize_DoWork(_In_ VMM_HANDLE H,  _In_ PVMM_PROCESS
             // function pointer to export directory -> probably forwarded symbol
             if(PE_EatForwardedFunctionNameValidate((LPSTR)(pbExpDir + pe->vaFunction - vaExpDir), NULL, 0, NULL)) {
                 ObStrMap_PushPtrAU(pObStrMap, (LPSTR)(pbExpDir + pe->vaFunction - vaExpDir), &pe->uszForwardedFunction, NULL);
+                cForwardedFunctions++;
             }
             pe->vaFunction = 0;
         }
@@ -528,7 +529,7 @@ VOID VmmWinLdrModule_Initialize32(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess,
             }
         }
 
-    } else if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X86) {
+    } else if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_32) {
         // Kernel mode process -> walk PsLoadedModuleList to enumerate drivers / .sys and .dlls.
         if(!H->vmm.kernel.vaPsLoadedModuleListPtr) { goto fail; }
         if(!VmmRead(H, pProcess, H->vmm.kernel.vaPsLoadedModuleListPtr, (PBYTE)&vaModuleLdrFirst32, sizeof(DWORD)) || !vaModuleLdrFirst32) { goto fail; }
@@ -841,14 +842,14 @@ BOOL VmmWinLdrModule_Initialize(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _
     if(pProcess->Map.pObModule && (!psvaInjected || !ObSet_Size(psvaInjected))) { return TRUE; }
     VmmTlbSpider(H, pProcess);
     EnterCriticalSection(&pProcess->LockUpdate);
-    if(pProcess->Map.pObModule && (!psvaInjected || !ObSet_Size(psvaInjected))) { goto fail; }  // not strict fail - but triggr cleanup and success.
+    if(pProcess->Map.pObModule && (!psvaInjected || !ObSet_Size(psvaInjected))) { goto fail; }  // not strict fail - but trigger cleanup and success.
     // set up context
     if(!(pmObModules = ObMap_New(H, OB_MAP_FLAGS_OBJECT_LOCALFREE))) { goto fail; }
     // fetch modules: "ordinary" linked list
-    if((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X86) || ((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X64) && pProcess->win.fWow64)) {
+    if((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_32) || ((H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_64) && pProcess->win.fWow64)) {
         VmmWinLdrModule_Initialize32(H, pProcess, pmObModules, pProcess->fUserOnly);
     }
-    if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_X64) {
+    if(H->vmm.tpSystem == VMM_SYSTEM_WINDOWS_64) {
         VmmWinLdrModule_Initialize64(H, pProcess, pmObModules, pProcess->fUserOnly);
     }
     // fetch modules: VADs
@@ -1016,6 +1017,30 @@ fail:
     VmmStatisticsLogEnd(H, &Statistics, "INIT_VERSIONINFO");
     LeaveCriticalSection(&pProcess->LockUpdate);
     Ob_DECREF(psmOb);
+}
+
+_Success_(return)
+BOOL VmmWinLdrModule_SymbolServer(_In_ VMM_HANDLE H, _In_ PVMM_MAP_MODULEENTRY pe, _In_ BOOL fExtendedChecks, _In_ DWORD cbSymbolServer, _Out_writes_(cbSymbolServer) LPSTR szSymbolServer) {
+    int cch;
+    PVMM_MAP_MODULEENTRY_DEBUGINFO pD;
+    if(cbSymbolServer) {
+        szSymbolServer[0] = 0;
+    }
+    if(pe->pExDebugInfo && pe->pExDebugInfo->uszGuid && pe->pExDebugInfo->uszPdbFilename && pe->pExVersionInfo && pe->pExVersionInfo->uszLegalCopyright) {
+        if((strlen(pe->pExDebugInfo->uszGuid) == 32) && !strstr(pe->pExDebugInfo->uszPdbFilename, "\\") && strstr(pe->pExVersionInfo->uszLegalCopyright, "Microsoft")) {
+            pD = pe->pExDebugInfo;
+            cch = _snprintf_s(szSymbolServer, cbSymbolServer, _TRUNCATE, "https://msdl.microsoft.com/download/symbols/%s/%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%i/%s",
+                pe->pExDebugInfo->uszPdbFilename,
+                *(PDWORD)(pD->Guid + 0), *(PWORD)(pD->Guid + 4), *(PWORD)(pD->Guid + 6),
+                pD->Guid[8], pD->Guid[9], pD->Guid[10], pD->Guid[11],
+                pD->Guid[12], pD->Guid[13], pD->Guid[14], pD->Guid[15],
+                pD->dwAge,
+                pe->pExDebugInfo->uszPdbFilename
+            );
+            return cch > 0;
+        }
+    }
+    return FALSE;
 }
 
 
@@ -1279,6 +1304,7 @@ PVMMWIN_USER_PROCESS_PARAMETERS VmmWin_UserProcessParameters_Get(_In_ VMM_HANDLE
         if(!VmmReadAllocUnicodeStringAsUTF8(H, pProcess, f32, 0, vaUserProcessParameters + (f32 ? 0x038 : 0x060), 0x400, &pu->uszImagePathName, &pu->cbuImagePathName)) {  // ImagePathName
             VmmReadAllocUnicodeStringAsUTF8(H, pProcess, f32, 0, vaUserProcessParameters + (f32 ? 0x030 : 0x050), 0x400, &pu->uszImagePathName, &pu->cbuImagePathName);    // DllPath (mutually exclusive with ImagePathName?)
         }
+        VmmReadAllocUnicodeStringAsUTF8(H, pProcess, f32, 0, vaUserProcessParameters + (f32 ? 0x024 : 0x038), 0x00010000, &pu->uszCurrentDirectory, &pu->cbuCurrentDirectory);
         VmmReadAllocUnicodeStringAsUTF8(H, pProcess, f32, 0, vaUserProcessParameters + (f32 ? 0x040 : 0x070), 0x00010000, &pu->uszCommandLine, &pu->cbuCommandLine);
         VmmReadAllocUnicodeStringAsUTF8(H, pProcess, f32, 0, vaUserProcessParameters + (f32 ? 0x070 : 0x0b0), 0x00010000, &pu->uszWindowTitle, &pu->cbuWindowTitle);
     }
@@ -1303,6 +1329,8 @@ PVMMWIN_USER_PROCESS_PARAMETERS VmmWin_UserProcessParameters_Get(_In_ VMM_HANDLE
     LeaveCriticalSection(&pProcess->LockUpdate);
     return pu;
 }
+
+
 
 // ----------------------------------------------------------------------------
 // PTE MAP FUNCTIONALITY BELOW:
@@ -1493,6 +1521,8 @@ BOOL VmmWinPte_InitializeMapText(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
     return pProcess->Map.pObPte->fTagScan;
 }
 
+
+
 // ----------------------------------------------------------------------------
 // THREADING FUNCTIONALITY BELOW:
 //
@@ -1547,6 +1577,8 @@ VOID VmmWinThread_Initialize_DoWork_Pre(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSy
     e->ftCreateTime = *(PQWORD)(pb + ot->oCreateTime);
     e->ftExitTime = *(PQWORD)(pb + ot->oExitTime);
     e->vaStartAddress = VMM_PTR_OFFSET(f32, pb, ot->oStartAddress);
+    e->vaImpersonationToken = ot->oClientSecurityOpt ? VMM_PTR_EX_FAST_REF(f32, VMM_PTR_OFFSET(f32, pb, ot->oClientSecurityOpt)) : 0;
+    e->vaWin32StartAddress = VMM_PTR_OFFSET(f32, pb, ot->oWin32StartAddress);
     e->vaStackBaseKernel = VMM_PTR_OFFSET(f32, pb, ot->oStackBase);
     e->vaStackLimitKernel = VMM_PTR_OFFSET(f32, pb, ot->oStackLimit);
     e->vaTrapFrame = VMM_PTR_OFFSET(f32, pb, ot->oTrapFrame);
@@ -1647,16 +1679,186 @@ BOOL VmmWinThread_Initialize(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
     if(pProcess->Map.pObThread) { return TRUE; }
     if(!H->vmm.fThreadMapEnabled) { return FALSE; }
     VmmTlbSpider(H, pProcess);
-    EnterCriticalSection(&pProcess->Map.LockUpdateThreadExtendedInfo);
+    EnterCriticalSection(&pProcess->LockUpdate);
     if(!pProcess->Map.pObThread) {
         VmmWinThread_Initialize_DoWork(H, pProcess);
         if(!pProcess->Map.pObThread) {
             pProcess->Map.pObThread = Ob_AllocEx(H, OB_TAG_MAP_THREAD, LMEM_ZEROINIT, sizeof(VMMOB_MAP_THREAD), NULL, NULL);
         }
     }
-    LeaveCriticalSection(&pProcess->Map.LockUpdateThreadExtendedInfo);
+    LeaveCriticalSection(&pProcess->LockUpdate);
     return pProcess->Map.pObThread ? TRUE : FALSE;
 }
+
+
+
+// ----------------------------------------------------------------------------
+// TOKEN FUNCTIONALITY BELOW:
+//
+// Tokens are used to determine access rights to objects. Most often the token
+// is related to a process, but it may also be an impersonation token related
+// to a thread.
+// ----------------------------------------------------------------------------
+
+/*
+* Object manager callback function for object cleanup tasks.
+* -- pVmmHandle
+*/
+VOID VmmWinToken_CloseObCallback(_In_ PVMMOB_TOKEN pOb)
+{
+    LocalFree(pOb->szSID);
+}
+
+/*
+* Initialize tokens for specific processes.
+* CALLER DECREF: *ppObTokens (each individual token).
+* -- H
+* -- cTokens = number of tokens to initialize.
+* -- pvaTokens
+* -- ppObTokens = buffer of size cToken to receive pointers to initialized tokens.
+* -- return
+*/
+_Success_(return)
+BOOL VmmWinToken_Initialize(_In_ VMM_HANDLE H, _In_ DWORD cTokens, _In_reads_(cTokens) QWORD *pvaToken, _Out_writes_(cTokens) PVMMOB_TOKEN *ppObTokens)
+{
+    BOOL f, fResult = FALSE, f32 = H->vmm.f32;
+    DWORD i, j, cbHdr, cb, dwIntegrityLevelIndex = 0;;
+    BYTE pb[0x1000];
+    PVMMOB_TOKEN pe;
+    PVMM_PROCESS pObSystemProcess = NULL;
+    PVMM_OFFSET_EPROCESS poe = &H->vmm.offset.EPROCESS;
+    QWORD va, *pva = NULL;
+    DWORD dwTokenSource;
+    LPSTR szSidIntegrity = NULL, szSidUser = NULL;
+    BOOL fSidIntegrity;
+    union {
+        SID SID;
+        BYTE pb[SECURITY_MAX_SID_SIZE];
+    } SidIntegrity;
+    VMM_TOKEN_INTEGRITY_LEVEL IntegrityLevel;
+    // 1: Initialize:
+    ZeroMemory(ppObTokens, cTokens * sizeof(PVMMOB_TOKEN));
+    if(!poe->opt.TOKEN_TokenId) { goto fail; }
+    cbHdr = f32 ? 0x2c : 0x5c;
+    cb = cbHdr + poe->opt.TOKEN_cb;
+    if((cb > sizeof(pb)) || !poe->opt.TOKEN_cb) { goto fail; }
+    if(!(pObSystemProcess = VmmProcessGet(H, 4))) { goto fail; }
+    if(!(pva = LocalAlloc(LMEM_ZEROINIT, (SIZE_T)cTokens * 2 * sizeof(QWORD)))) { goto fail; }
+    // 2: Initialize token objects:
+    for(i = 0; i < cTokens; i++) {
+        if(!(ppObTokens[i] = Ob_AllocEx(H, OB_TAG_VMM_TOKEN, LMEM_ZEROINIT, sizeof(VMMOB_TOKEN), (OB_CLEANUP_CB)VmmWinToken_CloseObCallback, NULL))) { goto fail; }
+        ppObTokens[i]->vaToken = pvaToken[i];
+        pva[i] = pvaToken[i] - cbHdr;           // adjust for _OBJECT_HEADER and Pool Header
+    }
+    // 3: Read token data:
+    VmmCachePrefetchPages4(H, pObSystemProcess, cTokens, pva, cb, 0);
+    for(i = 0; i < cTokens; i++) {
+        pe = ppObTokens[i];
+        if(!pe->vaToken || !VmmRead2(H, pObSystemProcess, pva[i], pb, cb, VMM_FLAG_FORCECACHE_READ)) { continue; }
+        // 2.1: fetch TOKEN.UserAndGroups (user id [_SID_AND_ATTRIBUTES])
+        pva[i] = VMM_PTR_OFFSET(f32, pb + cbHdr, poe->opt.TOKEN_UserAndGroups);
+        if(!VMM_KADDR(f32, pva[i])) { pva[i] = 0; continue; }
+        pe->vaUserAndGroups = pva[i];
+        // 2.2: fetch various offsets
+        for(j = 0, f = FALSE; !f && (j < cbHdr); j += (f32 ? 0x08 : 0x10)) {
+            f = VMM_POOLTAG_SHORT(*(PDWORD)(pb + j), 'Toke');
+        }
+        if(!f) {
+            dwTokenSource = _byteswap_ulong(*(PDWORD)(pb + cbHdr));
+            if((dwTokenSource != 'Adva') && (dwTokenSource != 'User')) {
+                pva[i] = 0;
+                continue;
+            }
+        }
+        pe->qwLUID = *(PQWORD)(pb + cbHdr + poe->opt.TOKEN_TokenId);
+        pe->dwSessionId = *(PDWORD)(pb + cbHdr + poe->opt.TOKEN_SessionId);
+        if(poe->opt.TOKEN_UserAndGroupCount) {
+            pe->dwUserAndGroupCount = *(PDWORD)(pb + cbHdr + poe->opt.TOKEN_UserAndGroupCount);
+        }
+        if(poe->opt.TOKEN_IntegrityLevelIndex) {
+            dwIntegrityLevelIndex = *(PDWORD)(pb + cbHdr + poe->opt.TOKEN_IntegrityLevelIndex);
+            if(dwIntegrityLevelIndex > pe->dwUserAndGroupCount) { dwIntegrityLevelIndex = 0; }
+        }
+        // 2.3: fetch TOKEN.UserAndGroups+dwIntegrityLevelIndex (integrity level [_SID_AND_ATTRIBUTES])
+        if(dwIntegrityLevelIndex) {
+            va = VMM_PTR_OFFSET(f32, pb + cbHdr, poe->opt.TOKEN_UserAndGroups) + dwIntegrityLevelIndex * (f32 ? 8ULL : 16ULL);
+            if(VMM_KADDR(f32, va)) { pva[cTokens + i] = va; }
+        }
+        // 2.4: fetch TOKEN.Privileges (VISTA+)
+        if(poe->opt.TOKEN_Privileges && (H->vmm.kernel.dwVersionBuild >= 6000)) {
+            memcpy(&pe->Privileges, pb + cbHdr + poe->opt.TOKEN_Privileges, sizeof(SEP_TOKEN_PRIVILEGES));
+        }
+    }
+    // 4: Read SID user & integrity ptr:
+    VmmCachePrefetchPages4(H, pObSystemProcess, 2 * cTokens, pva, 8, 0);
+    for(i = 0; i < cTokens; i++) {
+        // user:
+        f = pva[i] && VmmRead2(H, pObSystemProcess, pva[i], pb, 8, VMM_FLAG_FORCECACHE_READ) &&
+            (va = VMM_PTR_OFFSET(f32, pb, 0)) &&
+            VMM_KADDR(f32, va);
+        pva[i] = f ? va : 0;
+        // integrity:
+        f = pva[cTokens + i] && VmmRead2(H, pObSystemProcess, pva[cTokens + i], pb, 8, VMM_FLAG_FORCECACHE_READ) &&
+            (va = VMM_PTR_OFFSET(f32, pb, 0)) &&
+            VMM_KADDR(f32, va);
+        pva[cTokens + i] = f ? va : 0;
+    }
+    // 5: Get SID user & integrity:
+    VmmCachePrefetchPages4(H, pObSystemProcess, 2 * cTokens, pva, SECURITY_MAX_SID_SIZE, 0);
+    for(i = 0; i < cTokens; i++) {
+        pe = ppObTokens[i];
+        // user:
+        pe->fSidUserValid =
+            (va = pva[i]) &&
+            VmmRead2(H, pObSystemProcess, va, pe->SidUser.pb, SECURITY_MAX_SID_SIZE, VMM_FLAG_FORCECACHE_READ) &&
+            IsValidSid(&pe->SidUser.SID);
+        // integrity:
+        fSidIntegrity =
+            (va = pva[cTokens + i]) &&
+            VmmRead2(H, pObSystemProcess, va, SidIntegrity.pb, SECURITY_MAX_SID_SIZE, VMM_FLAG_FORCECACHE_READ) &&
+            IsValidSid(&SidIntegrity.SID) &&
+            ConvertSidToStringSidA(&SidIntegrity.SID, &szSidIntegrity);
+        if(fSidIntegrity) {
+            // https://redcanary.com/blog/process-integrity-levels/
+            IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_UNKNOWN;
+            if(!strcmp(szSidIntegrity, "S-1-16-16384")) { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_SYSTEM; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-0"))     { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_UNTRUSTED; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-4096"))  { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_LOW; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-8192"))  { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_MEDIUM; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-8448"))  { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_MEDIUMPLUS; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-12288")) { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_HIGH; } else
+            if(!strcmp(szSidIntegrity, "S-1-16-20480")) { IntegrityLevel = VMM_TOKEN_INTEGRITY_LEVEL_PROTECTED; };
+            pe->IntegrityLevel = IntegrityLevel;
+            LocalFree(szSidIntegrity); szSidIntegrity = NULL;
+        }
+        // system process:
+        pe->fSidUserSYSTEM =
+            pe->fSidUserValid &&
+            ConvertSidToStringSidA(&pe->SidUser.SID, &szSidUser) &&
+            CharUtil_StrEquals(szSidUser, "S-1-5-18", FALSE);
+        LocalFree(szSidUser); szSidUser = NULL;
+    }
+    // 6: finish up:
+    for(i = 0; i < cTokens; i++) {
+        pe = ppObTokens[i];
+        pe->fSidUserValid =
+            pe->fSidUserValid &&
+            ConvertSidToStringSidA(&pe->SidUser.SID, &pe->szSID) &&
+            (pe->dwHashSID = CharUtil_Hash32A(pe->szSID, FALSE));
+    }
+    fResult = TRUE;
+fail:
+    if(!fResult) {
+        for(i = 0; i < cTokens; i++) {
+            Ob_DECREF_NULL(&ppObTokens[i]);
+        }
+    }
+    Ob_DECREF(pObSystemProcess);
+    LocalFree(pva);
+    return fResult;
+}
+
+
 
 // ----------------------------------------------------------------------------
 // HANDLE FUNCTIONALITY BELOW:
@@ -2476,12 +2678,12 @@ BOOL VmmWinHandle_InitializeText(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess)
 {
     PVMM_PROCESS pObSystemProcess;
     if(pProcess->Map.pObHandle->pbMultiText) { return TRUE; }
-    EnterCriticalSection(&pProcess->Map.LockUpdateThreadExtendedInfo);
+    EnterCriticalSection(&pProcess->LockUpdate);
     if(!pProcess->Map.pObHandle->pbMultiText && (pObSystemProcess = VmmProcessGet(H, 4))) {
         VmmWinHandle_InitializeText_DoWork(H, pObSystemProcess, pProcess->Map.pObHandle);
         Ob_DECREF(pObSystemProcess);
     }
-    LeaveCriticalSection(&pProcess->Map.LockUpdateThreadExtendedInfo);
+    LeaveCriticalSection(&pProcess->LockUpdate);
     return pProcess->Map.pObHandle->pbMultiText ? TRUE : FALSE;
 }
 
@@ -2499,6 +2701,8 @@ BOOL VmmWinHandle_Initialize(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_
     if(pProcess->Map.pObHandle && (!fExtendedText || pProcess->Map.pObHandle->pbMultiText)) { return TRUE; }
     return VmmWinHandle_InitializeCore(H, pProcess) && (!fExtendedText || VmmWinHandle_InitializeText(H, pProcess));
 }
+
+
 
 // ----------------------------------------------------------------------------
 // PHYSICAL MEMORY MAP FUNCTIONALITY BELOW:
@@ -2956,6 +3160,8 @@ VOID VmmWinUser_Refresh(_In_ VMM_HANDLE H)
     ObContainer_SetOb(H->vmm.pObCMapUser, NULL);
 }
 
+
+
 // ----------------------------------------------------------------------------
 // WINDOWS EPROCESS WALKING FUNCTIONALITY FOR 64/32 BIT BELOW:
 // ----------------------------------------------------------------------------
@@ -3276,7 +3482,7 @@ VOID VmmWinProcess_Enumerate_PostProcessing(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS
             pProcPers->uszPathKernel = uszPathKernel;
             pProcPers->cuszPathKernel = (WORD)strlen(pProcPers->uszPathKernel);
             // locate FullName by skipping to last \ character.
-            pProcPers->uszNameLong = CharUtil_PathSplitLast(pProcPers->uszPathKernel);
+            pProcPers->uszNameLong = (LPSTR)CharUtil_PathSplitLast(pProcPers->uszPathKernel);
             pProcPers->cuszNameLong = (WORD)strlen(pProcPers->uszNameLong);
         }
     }
@@ -3335,7 +3541,7 @@ VOID VmmWinProcess_Enum64_Post(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProce
         VmmCachePrefetchPages(H, NULL, ctx->pObSetPrefetchDTB, 0);
         Ob_DECREF_NULL(&ctx->pObSetPrefetchDTB);
     }
-    if(*pdwPID && *(PQWORD)szName) {
+    if(*pdwPID && (*pdwPID < 0x10000000) && *(PQWORD)szName) {
         // treat csrss.exe as 'kernel' due to win32k mapping missing in System Process _AND_ treat MemCompression as 'user'
         fUser =
             !((*pdwPID == 4) || ((*pdwState == 0) && (*pqwPEB == 0)) || (*(PQWORD)szName == 0x78652e7373727363)) ||     // csrss.exe
@@ -3697,7 +3903,7 @@ VOID VmmWinProcess_Enum32_Post(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProce
         VmmCachePrefetchPages(H, NULL, ctx->pObSetPrefetchDTB, 0);
         Ob_DECREF_NULL(&ctx->pObSetPrefetchDTB);
     }
-    if(*pdwPID && *(PQWORD)szName) {
+    if(*pdwPID && (*pdwPID < 0x10000000) && *(PQWORD)szName) {
         // treat csrss.exe as 'kernel' due to win32k mapping missing in System Process _AND_ treat MemCompression as 'user'
         fUser =
             !((*pdwPID == 4) || ((*pdwState == 0) && (*pdwPEB == 0)) || (*(PQWORD)szName == 0x78652e7373727363)) ||     // csrss.exe
@@ -3870,7 +4076,7 @@ BOOL VmmWinProcess_Enumerate(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProcess
     VmmTlbSpider(H, pSystemProcess);
     // update processes within global lock (to avoid potential race conditions).
     EnterCriticalSection(&H->vmm.LockMaster);
-    if(H->vmm.tpMemoryModel == VMM_MEMORYMODEL_X64) {
+    if((H->vmm.tpMemoryModel == VMM_MEMORYMODEL_X64) || (H->vmm.tpMemoryModel == VMM_MEMORYMODEL_ARM64)) {
         fResult = VmmWinProcess_Enum64(H, pSystemProcess, fRefreshTotal, psvaNoLinkEPROCESS);
     } else if((H->vmm.tpMemoryModel == VMM_MEMORYMODEL_X86PAE) || (H->vmm.tpMemoryModel == VMM_MEMORYMODEL_X86)) {
         fResult = VmmWinProcess_Enum32(H, pSystemProcess, fRefreshTotal, psvaNoLinkEPROCESS);
@@ -3879,6 +4085,8 @@ BOOL VmmWinProcess_Enumerate(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pSystemProcess
     VmmStatisticsLogEnd(H, &Statistics, "EPROCESS_ENUMERATE");
     return fResult;
 }
+
+
 
 // ----------------------------------------------------------------------------
 // WINDOWS LIST WALKING FUNCTIONALITY BELOW:

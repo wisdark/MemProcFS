@@ -1,6 +1,6 @@
 // vmmpyc_kernel.c : implementation of the kernel functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -57,9 +57,10 @@ static void
 VmmPycKernel_dealloc(PyObj_Kernel *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
-    Py_XDECREF(self->pyObjPdb); self->pyObjPdb = NULL;
-    Py_XDECREF(self->pyObjProcess); self->pyObjProcess = NULL;
+    Py_XDECREF(self->pyObjProcess);
+    Py_XDECREF(self->pyObjPdb);
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)

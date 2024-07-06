@@ -1,6 +1,6 @@
 // vmmpyc_pdb.c : implementation of debug symbol (pbd) functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -139,7 +139,8 @@ static void
 VmmPycPdb_dealloc(PyObj_Pdb *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)

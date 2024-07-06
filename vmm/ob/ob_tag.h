@@ -1,6 +1,6 @@
 // ob.h : definitions of object tags.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OB_TAG_H__
@@ -9,8 +9,12 @@
 #include "ob.h"
 
 #define OB_TAG_CTX_MMISCINFO            'CMI '
-#define OB_TAG_FORENSIC_FILE            'Ffil'
+#define OB_TAG_FC_FILE                  'Ffil'
+#define OB_TAG_FC_SCANVIRTMEM_CTX       'FvmC'
+#define OB_TAG_FC_SCANVIRTMEM_ENTRY     'FvmE'
+#define OB_TAG_FC_SCANOBJECT_ENTRY      'FobE'
 #define OB_TAG_INFODB_CTX               'IDBC'
+#define OB_TAG_INFODB_YARA_RULES        'IDBY'
 #define OB_TAG_MAP_PTE                  'Mpte'
 #define OB_TAG_MAP_VAD                  'Mvad'
 #define OB_TAG_MAP_VADEX                'Mvae'
@@ -26,6 +30,7 @@
 #define OB_TAG_MAP_OBJECT               'Mobj'
 #define OB_TAG_MAP_KDEVICE              'Mdev'
 #define OB_TAG_MAP_KDRIVER              'Mdrv'
+#define OB_TAG_MAP_PREFETCH             'Mprf'
 #define OB_TAG_MAP_PHYSMEM              'Mmem'
 #define OB_TAG_MAP_USER                 'Musr'
 #define OB_TAG_MAP_SERVICE              'Msvc'
@@ -40,6 +45,7 @@
 #define OB_TAG_MOD_FCTIMELINE           'mFtl'
 #define OB_TAG_MOD_MINIDUMP_CTX         'mMDx'
 #define OB_TAG_MOD_SEARCH_CTX           'mSHx'
+#define OB_TAG_OBJ_CTX                  'Octx'
 #define OB_TAG_OBJ_ERROR                'Oerr'
 #define OB_TAG_OBJ_FILE                 'Ofil'
 #define OB_TAG_OBJ_DISPLAY              'Odis'
@@ -58,6 +64,7 @@
 #define OB_TAG_VM_CONTEXT               'VmC_'
 #define OB_TAG_VM_CONTEXT_TRANSLATE     'VmCt'
 #define OB_TAG_VM_GLOBAL                'VmG_'
+#define OB_TAG_VMM_TOKEN                'Tok_'
 #define OB_TAG_VMM_PROCESS              'Ps__'
 #define OB_TAG_VMM_PROCESS_CLONE        'PsC_'
 #define OB_TAG_VMM_PROCESS_PERSISTENT   'PsSt'
@@ -65,5 +72,7 @@
 #define OB_TAG_VMM_VIRT2PHYS            'PsVP'
 #define OB_TAB_VMMDLL_EXTERNALMEM       'EXTM'
 #define OB_TAG_VMMVFS_DUMPCONTEXT       'CDmp'
+#define OB_TAG_YARA_CONTEXT             'YrCX'
+#define OB_TAG_YARA_PARSEHANDLE         'YrPH'
 
 #endif /* __OB_TAG_H__ */

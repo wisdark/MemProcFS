@@ -11,7 +11,7 @@
 // WIN10 1507->1803: PagedPool/NonPagedPool not supported.
 // WIN10 1809+: Support but pages may be missing.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -31,7 +31,7 @@
 * -- dwPoolType
 * -- return
 */
-inline VMM_MAP_POOL_TP VmmWinPool_PoolTypeConvert(_In_ DWORD dwPoolType)
+__forceinline VMM_MAP_POOL_TP VmmWinPool_PoolTypeConvert(_In_ DWORD dwPoolType)
 {
     if(dwPoolType & 1) {
         return VMM_MAP_POOL_TP_PagedPool;
@@ -661,7 +661,7 @@ BOOL VmmWinPool_AllPool1903_2_HeapFillSegmentHeap(_In_ VMM_HANDLE H, PVMMWINPOOL
     QWORD va = 0;
     // 1: prefetch
     if(!(cSegHeap = ObMap_Size(ctx->pmHeap))) { return FALSE; }
-    if(!(psvaObPrefetch = ObMap_FilterSet(ctx->pmHeap, ObMap_FilterSet_FilterAllKey))) { return FALSE; }
+    if(!(psvaObPrefetch = ObMap_FilterSet(ctx->pmHeap, NULL, ObMap_FilterSet_FilterAllKey))) { return FALSE; }
     VmmCachePrefetchPages3(H, ctx->pSystemProcess, psvaObPrefetch, ctx->po->_SEGMENT_HEAP.cb, 0);
     Ob_DECREF_NULL(&psvaObPrefetch);
     // 2: iterate nt!_SEGMENT_HEAP -> FETCH ADDR nt!_HEAP_PAGE_SEGMENT
@@ -755,7 +755,7 @@ VOID VmmWinPool_AllPool1903_3_HeapFillPageSegment(_In_ VMM_HANDLE H, _In_ PVMMWI
     QWORD va;
     POB_SET psvaObTry1 = NULL, psvaObTry2 = NULL;
     if(!(psvaObTry2 = ObSet_New(H))) { goto fail; }
-    if(!(psvaObTry1 = ObMap_FilterSet(ctx->pmPgSeg, ObMap_FilterSet_FilterAllKey))) { goto fail; }
+    if(!(psvaObTry1 = ObMap_FilterSet(ctx->pmPgSeg, NULL, ObMap_FilterSet_FilterAllKey))) { goto fail; }
     while(TRUE) {
         // try1 items
         while((va = ObSet_Pop(psvaObTry1))) {
@@ -1118,6 +1118,10 @@ fail:
     return fResult;
 }
 
+#define VMMWINPOOL_POOLTAG_STRICT_CHAR_ALLOW \
+    "0000000000000000000000000000000011000000000001101111111111000000" \
+    "0111111111111111111111111110000101111111111111111111111111100000"
+
 VOID VmmWinPool_AllPool7_ProcessSingleRange(_In_ VMM_HANDLE H, _In_ PVMMWINPOOL7_CTX ctx, _In_ PVMMWINPOOL7_RANGE pe, _In_ PBYTE pb)
 {
     BOOL f, fTagBad, fPrev = FALSE, f32 = H->vmm.f32;
@@ -1146,14 +1150,14 @@ VOID VmmWinPool_AllPool7_ProcessSingleRange(_In_ VMM_HANDLE H, _In_ PVMMWINPOOL7
             qwProcessBilled = pHdr64->ProcessBilled;
         }
         // check: index / block size / process billed
-        if(dwPoolIndex) { goto next; }
+        //if(dwPoolIndex) { goto next; }
         if(dwBlockSize < 2) { goto next; }
         if(fPrev && dwPreviousSize && (dwPrevBlockSize != dwPreviousSize)) { goto next; }
-        if(qwProcessBilled && !fPrev) {
+        if(dwPoolIndex || (qwProcessBilled && !fPrev)) {
             // strict pool tag checking:
             for(i = 0; i <= 16; i += 8) {
                 ch = (CHAR)(dwPoolTag >> i);
-                if(((ch < 'a') || (ch > 'z')) && ((ch < 'A') || (ch > 'Z')) && (ch != ' ')) {
+                if((ch & 0x80) || (VMMWINPOOL_POOLTAG_STRICT_CHAR_ALLOW[(BYTE)ch] == '0')) {
                     goto next;
                 }
             }

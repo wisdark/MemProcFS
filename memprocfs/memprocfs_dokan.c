@@ -1,4 +1,4 @@
-// memprocfs_dokan.c : implementation of core functionality for the Memory Process File System
+// memprocfs_dokan.c : implementation of core functionality for MemProcFS
 // This is just a thin loader for the virtual memory manager dll which contains the logic.
 //
 // (c) Ulf Frisk, 2018-2023
@@ -17,11 +17,6 @@
 #include <dokan.h>
 #pragma warning( pop )
 
-DWORD g_dbg_c = 0;
-
-//#define dbg_GetTickCount64()            GetTickCount64()
-//#define dbg_wprintf_init(format, ...)   { wprintf(format, ++g_dbg_c, ##__VA_ARGS__); }
-//#define dbg_wprintf(format, ...)        { wprintf(format, ++g_dbg_c, ##__VA_ARGS__); }
 #define dbg_wprintf_init(format, ...)   {}
 #define dbg_wprintf(format, ...)        {}
 #define dbg_GetTickCount64()            0
@@ -34,184 +29,9 @@ typedef struct tdVMMVFS_CONFIG {
 } VMMVFS_CONFIG, *PVMMVFS_CONFIG;
 
 PVMMVFS_CONFIG ctxVfs;
-HANDLE g_hLC_RemoteFS;
 VMM_HANDLE g_hVMM;
 
 CHAR g_VfsMountPoint = 'M';
-
-
-
-//-----------------------------------------------------------------------------
-// LOCAL/REMOTE WRAPPER FUNCTIONS BELOW:
-//-----------------------------------------------------------------------------
-
-/*
-* WRAPPER FUNCTION AROUND LOCAL/REMOTE VMMDLL_VfsListU
-* List a directory of files in MemProcFS. Directories and files will be listed
-* by callbacks into functions supplied in the pFileList parameter.
-* If information of an individual file is needed it's neccessary to list all
-* files in its directory.
-* -- uszPath
-* -- pFileList
-* -- return
-*/
-_Success_(return) BOOL MemProcFS_VfsListU(_In_ LPSTR uszPath, _Inout_ PVMMDLL_VFS_FILELIST2 pFileList)
-{
-    DWORD i;
-    LC_CMD_AGENT_VFS_REQ Req;
-    PLC_CMD_AGENT_VFS_RSP pRsp = NULL;
-    PVMMDLL_VFS_FILELISTBLOB pVfsList;
-    PVMMDLL_VFS_FILELISTBLOB_ENTRY pe;
-    if(!g_hLC_RemoteFS) {
-        return VMMDLL_VfsListU(g_hVMM, uszPath, pFileList);
-    }
-    ZeroMemory(&Req, sizeof(LC_CMD_AGENT_VFS_REQ));
-    Req.dwVersion = LC_CMD_AGENT_VFS_REQ_VERSION;
-    if(!CharUtil_UtoU(uszPath, -1, Req.uszPathFile, sizeof(Req.uszPathFile), NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY)) { goto fail; }
-    if(!LcCommand(g_hLC_RemoteFS, LC_CMD_AGENT_VFS_LIST, sizeof(LC_CMD_AGENT_VFS_REQ), (PBYTE)&Req, (PBYTE *)&pRsp, NULL) || !pRsp) { goto fail; }
-    pVfsList = (PVMMDLL_VFS_FILELISTBLOB)pRsp->pb;      // sanity/security checks on remote deta done in leechcore
-    pVfsList->uszMultiText = (LPSTR)pVfsList + (QWORD)pVfsList->uszMultiText;
-    for(i = 0; i < pVfsList->cFileEntry; i++) {
-        pe = pVfsList->FileEntry + i;
-        if(pe->cbFileSize == (QWORD)-1) {
-            pFileList->pfnAddDirectory(pFileList->h, pVfsList->uszMultiText + pe->ouszName, (PVMMDLL_VFS_FILELIST_EXINFO)&pe->ExInfo);
-        } else {
-            pFileList->pfnAddFile(pFileList->h, pVfsList->uszMultiText + pe->ouszName, pe->cbFileSize, (PVMMDLL_VFS_FILELIST_EXINFO)&pe->ExInfo);
-        }
-    }
-fail:
-    LocalFree(pRsp);
-    return TRUE;
-}
-
-/*
-* WRAPPER FUNCTION AROUND LOCAL/REMOTE VMMDLL_VfsReadW
-* Read select parts of a file in MemProcFS.
-* -- wszFileName
-* -- pb
-* -- cb
-* -- pcbRead
-* -- cbOffset
-* -- return
-*/
-NTSTATUS MemProcFS_VfsReadW(_In_ LPWSTR wszFileName, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ ULONG64 cbOffset)
-{
-    NTSTATUS nt = VMMDLL_STATUS_FILE_INVALID;
-    LC_CMD_AGENT_VFS_REQ Req;
-    PLC_CMD_AGENT_VFS_RSP pRsp = NULL;
-    if(!g_hLC_RemoteFS) {
-        return VMMDLL_VfsReadW(g_hVMM, wszFileName, pb, cb, pcbRead, cbOffset);
-    }
-    // Remote MemProcFS below:
-    ZeroMemory(&Req, sizeof(LC_CMD_AGENT_VFS_REQ));
-    Req.dwVersion = LC_CMD_AGENT_VFS_REQ_VERSION;
-    Req.qwOffset = cbOffset;
-    Req.dwLength = cb;
-    if(!CharUtil_WtoU(wszFileName, -1, Req.uszPathFile, sizeof(Req.uszPathFile), NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY)) { goto fail; }
-    if(!LcCommand(g_hLC_RemoteFS, LC_CMD_AGENT_VFS_READ, sizeof(LC_CMD_AGENT_VFS_REQ), (PBYTE)&Req, (PBYTE *)&pRsp, NULL) || !pRsp) { goto fail; }
-    nt = pRsp->dwStatus;
-    *pcbRead = min(cb, pRsp->cb);
-    memcpy(pb, pRsp->pb, *pcbRead);
-fail:
-    LocalFree(pRsp);
-    return nt;
-}
-
-/*
-* WRAPPER FUNCTION AROUND LOCAL/REMOTE VMMDLL_VfsWriteW
-* Write select parts to a file in MemProcFS.
-* -- wszFileName
-* -- pb
-* -- cb
-* -- pcbWrite
-* -- cbOffset
-* -- return
-*/
-NTSTATUS MemProcFS_VfsWriteW(_In_ LPWSTR wszFileName, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbWrite, _In_ ULONG64 cbOffset)
-{
-    NTSTATUS nt = VMMDLL_STATUS_FILE_INVALID;
-    PLC_CMD_AGENT_VFS_REQ pReq = NULL;
-    PLC_CMD_AGENT_VFS_RSP pRsp = NULL;
-    if(!g_hLC_RemoteFS) {
-        return VMMDLL_VfsWriteW(g_hVMM, wszFileName, pb, cb, pcbWrite, cbOffset);
-    }
-    // Remote MemProcFS below:
-    *pcbWrite = 0;
-    if(!(pReq = LocalAlloc(0, sizeof(LC_CMD_AGENT_VFS_REQ) + cb))) { goto fail; }
-    ZeroMemory(pReq, sizeof(LC_CMD_AGENT_VFS_REQ));
-    pReq->dwVersion = LC_CMD_AGENT_VFS_REQ_VERSION;
-    pReq->qwOffset = cbOffset;
-    pReq->dwLength = cb;
-    pReq->cb = cb;
-    memcpy(pReq->pb, pb, cb);
-    if(!CharUtil_WtoU(wszFileName, -1, pReq->uszPathFile, sizeof(pReq->uszPathFile), NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY)) { goto fail; }
-    if(!LcCommand(g_hLC_RemoteFS, LC_CMD_AGENT_VFS_WRITE, sizeof(LC_CMD_AGENT_VFS_REQ) + cb, (PBYTE)pReq, (PBYTE *)&pRsp, NULL) || !pRsp) { goto fail; }
-    nt = pRsp->dwStatus;
-    *pcbWrite = min(cb, pRsp->cbReadWrite);
-fail:
-    LocalFree(pReq);
-    LocalFree(pRsp);
-    return nt;
-}
-
-/*
-* WRAPPER FUNCTION AROUND LOCAL/REMOTE VMMDLL_ConfigGet
-* Set a device specific option value. Please see defines VMMDLL_OPT_* for infor-
-* mation about valid option values. Please note that option values may overlap
-* between different device types with different meanings.
-* -- fOption
-* -- pqwValue = pointer to ULONG64 to receive option value.
-* -- return = success/fail.
-*/
-_Success_(return)
-BOOL MemProcFS_ConfigGet(_In_ ULONG64 fOption, _Out_ PULONG64 pqwValue)
-{
-    BOOL fResult;
-    LC_CMD_AGENT_VFS_REQ Req = { 0 };
-    PLC_CMD_AGENT_VFS_RSP pRsp = NULL;
-    *pqwValue = 0;
-    if(!g_hLC_RemoteFS) {
-        return VMMDLL_ConfigGet(g_hVMM, fOption, pqwValue);
-    }
-    // Remote MemProcFS below:
-    Req.dwVersion = LC_CMD_AGENT_VFS_REQ_VERSION;
-    Req.fOption = fOption;
-    fResult = LcCommand(g_hLC_RemoteFS, LC_CMD_AGENT_VFS_OPT_GET, sizeof(LC_CMD_AGENT_VFS_REQ), (PBYTE)&Req, (PBYTE *)&pRsp, NULL);
-    if(!fResult) { return FALSE; }
-    if((fResult = (pRsp->cb == sizeof(QWORD)))) {
-        *pqwValue = *(PQWORD)pRsp->pb;
-    }
-    LocalFree(pRsp);
-    return fResult;
-}
-
-/*
-* WRAPPER FUNCTION AROUND LOCAL/REMOTE VMMDLL_ConfigSet
-* Set a device specific option value. Please see defines VMMDLL_OPT_* for infor-
-* mation about valid option values. Please note that option values may overlap
-* between different device types with different meanings.
-* -- fOption
-* -- qwValue
-* -- return = success/fail.
-*/
-_Success_(return)
-BOOL MemProcFS_ConfigSet(_In_ ULONG64 fOption, _In_ ULONG64 qwValue)
-{
-    BOOL fResult;
-    PLC_CMD_AGENT_VFS_REQ pReq = NULL;
-    if(!g_hLC_RemoteFS) {
-        return VMMDLL_ConfigSet(g_hVMM, fOption, qwValue);
-    }
-    // Remote MemProcFS below:
-    if(!(pReq = LocalAlloc(LMEM_ZEROINIT, sizeof(LC_CMD_AGENT_VFS_REQ) + sizeof(QWORD)))) { return FALSE; }
-    pReq->dwVersion = LC_CMD_AGENT_VFS_REQ_VERSION;
-    pReq->fOption = fOption;
-    pReq->cb = sizeof(QWORD);
-    *(PQWORD)pReq->pb = 1ULL;
-    fResult = LcCommand(g_hLC_RemoteFS, LC_CMD_AGENT_VFS_OPT_SET, sizeof(LC_CMD_AGENT_VFS_REQ) + sizeof(QWORD), (PBYTE)pReq, NULL, NULL);
-    LocalFree(pReq);
-    return fResult;
-}
 
 
 
@@ -335,7 +155,7 @@ VfsDokanCallback_ReadFile(LPCWSTR wcsFileName, LPVOID Buffer, DWORD BufferLength
     NTSTATUS nt;
     if(!ctxVfs || !ctxVfs->fInitialized) { return STATUS_FILE_INVALID; }
     dbg_wprintf_init(L"DEBUG::%08x -------- VfsCallback_ReadFile:\t\t\t 0x%08x %s\n", 0, wcsFileName);
-    nt = MemProcFS_VfsReadW((LPWSTR)wcsFileName, Buffer, BufferLength, ReadLength, Offset);
+    nt = VMMDLL_VfsReadW(g_hVMM, (LPWSTR)wcsFileName, Buffer, BufferLength, ReadLength, Offset);
     dbg_wprintf(L"DEBUG::%08x %8x VfsCallback_ReadFile:\t\t\t 0x%08x %s\t [ %016llx %08x %08x ]\n", (DWORD)(dbg_GetTickCount64() - tmStart), nt, wcsFileName, Offset, BufferLength, *ReadLength);
     return nt;
 }
@@ -347,7 +167,7 @@ VfsDokanCallback_WriteFile(LPCWSTR wcsFileName, LPCVOID Buffer, DWORD NumberOfBy
     NTSTATUS nt;
     if(!ctxVfs || !ctxVfs->fInitialized) { return STATUS_FILE_INVALID; }
     dbg_wprintf_init(L"DEBUG::%08x -------- VfsCallback_WriteFile:\t\t\t 0x%08x %s\n", 0, wcsFileName);
-    nt = MemProcFS_VfsWriteW((LPWSTR)wcsFileName, (PBYTE)Buffer, NumberOfBytesToWrite, NumberOfBytesWritten, Offset);
+    nt = VMMDLL_VfsWriteW(g_hVMM, (LPWSTR)wcsFileName, (PBYTE)Buffer, NumberOfBytesToWrite, NumberOfBytesWritten, Offset);
     dbg_wprintf(L"DEBUG::%08x %8x VfsCallback_WriteFile:\t\t\t 0x%08x %s\t [ %016llx %08x %08x ]\n", (DWORD)(dbg_GetTickCount64() - tmStart), nt, wcsFileName, Offset, NumberOfBytesToWrite, *NumberOfBytesWritten);
     return nt;
 }
@@ -365,6 +185,9 @@ VOID VfsDokan_Close(_In_ CHAR chMountPoint)
         ctxVfs->fInitialized = FALSE;
         if(wchMountPoint) {
             hModuleDokan = LoadLibraryExA("dokan2.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if(!hModuleDokan) {
+                hModuleDokan = LoadLibraryA("dokan2.dll");
+            }
             if(hModuleDokan) {
                 pfnDokanUnmount = (BOOL(WINAPI *)(WCHAR))GetProcAddress(hModuleDokan, "DokanUnmount");
                 if(pfnDokanUnmount) {
@@ -384,24 +207,25 @@ VOID VfsDokan_InitializeAndMount_DisplayInfo(LPWSTR wszMountPoint)
     ULONG64 qwVersionWinMajor = 0, qwVersionWinMinor = 0, qwVersionWinBuild = 0;
     ULONG64 qwUniqueSystemId = 0, iMemoryModel;
     // get vmm.dll versions
-    MemProcFS_ConfigGet(VMMDLL_OPT_CONFIG_VMM_VERSION_MAJOR, &qwVersionVmmMajor);
-    MemProcFS_ConfigGet(VMMDLL_OPT_CONFIG_VMM_VERSION_MINOR, &qwVersionVmmMinor);
-    MemProcFS_ConfigGet(VMMDLL_OPT_CONFIG_VMM_VERSION_REVISION, &qwVersionVmmRevision);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_CONFIG_VMM_VERSION_MAJOR, &qwVersionVmmMajor);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_CONFIG_VMM_VERSION_MINOR, &qwVersionVmmMinor);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_CONFIG_VMM_VERSION_REVISION, &qwVersionVmmRevision);
     // get operating system versions
-    MemProcFS_ConfigGet(VMMDLL_OPT_CORE_MEMORYMODEL, &iMemoryModel);
-    MemProcFS_ConfigGet(VMMDLL_OPT_WIN_VERSION_MAJOR, &qwVersionWinMajor);
-    MemProcFS_ConfigGet(VMMDLL_OPT_WIN_VERSION_MINOR, &qwVersionWinMinor);
-    MemProcFS_ConfigGet(VMMDLL_OPT_WIN_VERSION_BUILD, &qwVersionWinBuild);
-    MemProcFS_ConfigGet(VMMDLL_OPT_WIN_SYSTEM_UNIQUE_ID, &qwUniqueSystemId);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_CORE_MEMORYMODEL, &iMemoryModel);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_WIN_VERSION_MAJOR, &qwVersionWinMajor);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_WIN_VERSION_MINOR, &qwVersionWinMinor);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_WIN_VERSION_BUILD, &qwVersionWinBuild);
+    VMMDLL_ConfigGet(g_hVMM, VMMDLL_OPT_WIN_SYSTEM_UNIQUE_ID, &qwUniqueSystemId);
     printf("\n" \
-        "=============== MemProcFS - THE MEMORY PROCESS FILE SYSTEM ===============\n" \
-        " - Author:           Ulf Frisk - pcileech@frizk.net                     \n" \
-        " - Info:             https://github.com/ufrisk/MemProcFS                \n" \
-        " - License:          GNU Affero General Public License v3.0             \n" \
-        "   -------------------------------------------------------------------- \n" \
-        "   MemProcFS is free open source software. If you find it useful please \n" \
-        "   become a sponsor at: https://github.com/sponsors/ufrisk Thank You :) \n" \
-        "   -------------------------------------------------------------------- \n" \
+        "==============================  MemProcFS  ==============================\n" \
+        " - Author:           Ulf Frisk - pcileech@frizk.net                      \n" \
+        " - Info:             https://github.com/ufrisk/MemProcFS                 \n" \
+        " - Discord:          https://discord.gg/pcileech                         \n" \
+        " - License:          GNU Affero General Public License v3.0              \n" \
+        "   --------------------------------------------------------------------- \n" \
+        "   MemProcFS is free open source software. If you find it useful please  \n" \
+        "   become a sponsor at: https://github.com/sponsors/ufrisk Thank You :)  \n" \
+        "   --------------------------------------------------------------------- \n" \
         " - Version:          %i.%i.%i (%s)\n" \
         " - Mount Point:      %S           \n" \
         " - Tag:              %i_%x        \n",
@@ -430,6 +254,9 @@ VOID VfsDokan_InitializeAndMount(_In_ CHAR chMountPoint)
     VOID(WINAPI *pfnDokanShutdown)();
     // allocate
     hModuleDokan = LoadLibraryExA("dokan2.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!hModuleDokan) {
+        hModuleDokan = LoadLibraryA("dokan2.dll");
+    }
     if(!hModuleDokan) {
         printf("MOUNT: Failed. The required DOKANY file system library is not installed. \n");
         printf("Please download from : https://github.com/dokan-dev/dokany/releases/latest\n");
@@ -499,6 +326,10 @@ fail:
 // GENERAL INITIALIZATION FUNCTIONALITY BELOW:
 //-----------------------------------------------------------------------------
 
+_Success_(return) BOOL MemProcFS_VfsListU(_In_ LPSTR uszPath, _Inout_ PVMMDLL_VFS_FILELIST2 pFileList)
+{
+    return VMMDLL_VfsListU(g_hVMM, uszPath, pFileList);
+}
 
 /*
 * Retrieve the mount point from the command line arguments.
@@ -544,12 +375,7 @@ DWORD WINAPI MemProcFsCtrlHandler_TryShutdownThread(PVOID pv)
         VfsList_Close();
     } __except(EXCEPTION_EXECUTE_HANDLER) { ; }
     __try {
-        if(g_hLC_RemoteFS) {
-            LcClose(g_hLC_RemoteFS);
-            g_hLC_RemoteFS = NULL;
-        } else {
-            VMMDLL_CloseAll();
-        }
+        VMMDLL_CloseAll();
     } __except(EXCEPTION_EXECUTE_HANDLER) { ; }
     return 1;
 }
@@ -574,8 +400,7 @@ BOOL WINAPI MemProcFsCtrlHandler(DWORD fdwCtrlType)
         return TRUE;
     }
     if(fdwCtrlType == CTRL_BREAK_EVENT) {
-        printf("CTRL+BREAK detected - refresh initiated ...\n");
-        VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_REFRESH_ALL, 1);
+        printf("CTRL+BREAK detected - refresh/debug initated ...\n");
         VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_CONFIG_DEBUG, 1);
         printf("CTRL+BREAK finished ...\n");
         return TRUE;
@@ -584,53 +409,10 @@ BOOL WINAPI MemProcFsCtrlHandler(DWORD fdwCtrlType)
 }
 
 /*
-* Initialize a remote instance of VMM.DLL instead of loading it into the
-* process as is the default and preferred way.
-* -- argc
-* -- argv
-* -- return
-*/
-_Success_(return)
-BOOL MemProcFS_InitializeRemoteFS(_In_ int argc, _In_ char *argv[])
-{
-    int i;
-    LC_CONFIG Dev = { 0 };
-    // connect to remote system using LeechCore
-    Dev.dwVersion = LC_CONFIG_VERSION;
-    if(argc == 0) { return FALSE; }
-    for(i = 0; i < argc - 1; i++) {
-        if(!_stricmp("-device", argv[i])) {
-            strncpy_s(Dev.szDevice, MAX_PATH, argv[i + 1], _TRUNCATE);
-        }
-        if(!_stricmp("-remote", argv[i])) {
-            strncpy_s(Dev.szRemote, MAX_PATH, argv[i + 1], _TRUNCATE);
-        }
-    }
-    if(!Dev.szDevice[0]) {
-        printf("MemProcFS: missing required option: -device\n");
-        return FALSE;
-    }
-    if(!Dev.szRemote[0]) {
-        printf("MemProcFS: missing required option: -remote\n");
-        return FALSE;
-    }
-    if(!(g_hLC_RemoteFS = LcCreate(&Dev))) {
-        printf("MemProcFS: Failed to connect to the remote system.\n  Device: %s\n  Remote: %s\n", Dev.szDevice, Dev.szRemote);
-        return FALSE;
-    }
-    // perform set operation (this will trigger a load of remote memory analysis)
-    if(!MemProcFS_ConfigSet(VMMDLL_OPT_CONFIG_STATISTICS_FUNCTIONCALL, 1)) {
-        printf("MemProcFS: Failed to initialize remote memory analysis.\n  Device: %s\n  Remote: %s\n", Dev.szDevice, Dev.szRemote);
-        return FALSE;
-    }
-    return TRUE;
-}
-
-/*
-* Main entry point of the memory process file system. The main function will
-* load and initialize VMM.DLL then initialize the VMM.DLL plugin manager and
-* then hand over control to vfs.c!VfsInitializeAndMount which will start the
-* dokany virtual file system and mount it at the correct mount point.
+* Main entry point of MemProcFS. The main function will load and initialize
+* VMM.DLL then initialize the VMM.DLL plugin manager and then hand over control
+* to vfs.c!VfsInitializeAndMount which will start the virtual file system and
+* mount it at the correct mount point.
 * All 'interesting' functionality will take part in VMM.DLL - the memprocfs
 * executable should be considered as a thin wrapper around VMM.DLL.
 * -- argc
@@ -640,13 +422,10 @@ BOOL MemProcFS_InitializeRemoteFS(_In_ int argc, _In_ char *argv[])
 int main(_In_ int argc, _In_ char* argv[])
 {
     // MAIN FUNCTION PROPER BELOW:
-    BOOL result, fRemoteFS = FALSE;
-    BOOL fMountSpecified, fPythonExec;
     int i;
-    HANDLE hLC_RemoteFS = 0;
+    BOOL result, fMountSpecified, fPythonExec;
     LPSTR *szArgs = NULL;
     LC_CMD_AGENT_VFS_REQ Req = { 0 };
-    g_hLC_RemoteFS = 0;
     g_VfsMountPoint = GetMountPoint(argc, argv, &fMountSpecified, &fPythonExec);
     if(g_VfsMountPoint < 'A' || g_VfsMountPoint > 'Z') {
         if(!fPythonExec || fMountSpecified) {
@@ -659,49 +438,32 @@ int main(_In_ int argc, _In_ char* argv[])
         printf("MemProcFS: Out of memory!\n");
         return 1;
     }
+    SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
+    szArgs[0] = "-printf";
     for(i = 1; i < argc; i++) {
         szArgs[i] = argv[i];
-        if(!_stricmp(argv[i], "-remotefs")) { fRemoteFS = TRUE; }
     }
-    SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
-    if(fRemoteFS) {
-        if(!MemProcFS_InitializeRemoteFS(argc, argv)) {
-            // error message already given by MemProcFS_InitializeRemoteFS()
-            return 1;
-        }
-        if(fPythonExec && !fMountSpecified) {
-            LcClose(g_hLC_RemoteFS);
-            g_hLC_RemoteFS = NULL;
-            return 0;
-        }
-    } else {
-        szArgs[0] = "-printf";
-        if(argc > 2) {
-            szArgs[argc++] = "-userinteract";
-        }
-        g_hVMM = VMMDLL_Initialize(argc, szArgs);
-        if(!g_hVMM) {
-            // any error message will already be shown by the InitializeReserved function.
-            return 1;
-        }
-        if(fPythonExec && !fMountSpecified) {
-            VMMDLL_CloseAll();
-            return 0;
-        }
-        VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_CONFIG_STATISTICS_FUNCTIONCALL, 1);
-        result = VMMDLL_InitializePlugins(g_hVMM);
-        if(!result) {
-            printf("MemProcFS: Error file system plugins in vmm.dll!\n");
-            return 1;
-        }
+    if(argc > 2) {
+        szArgs[argc++] = "-userinteract";
+    }
+    g_hVMM = VMMDLL_Initialize(argc, szArgs);
+    if(!g_hVMM) {
+        // any error message will already be shown by the InitializeReserved function.
+        return 1;
+    }
+    if(fPythonExec && !fMountSpecified) {
+        VMMDLL_CloseAll();
+        return 0;
+    }
+    VMMDLL_ConfigSet(g_hVMM, VMMDLL_OPT_CONFIG_STATISTICS_FUNCTIONCALL, 1);
+    result = VMMDLL_InitializePlugins(g_hVMM);
+    if(!result) {
+        printf("MemProcFS: Error file system plugins in vmm.dll!\n");
+        return 1;
     }
     SetConsoleCtrlHandler(MemProcFsCtrlHandler, TRUE);
     VfsList_Initialize(MemProcFS_VfsListU, 500, 128, FALSE);
     VfsDokan_InitializeAndMount(g_VfsMountPoint);
-    if(g_hLC_RemoteFS) {
-        LcClose(g_hLC_RemoteFS);
-        g_hLC_RemoteFS = NULL;
-    }
     CreateThread(NULL, 0, MemProcFsCtrlHandler_TryShutdownThread, NULL, 0, NULL);
     Sleep(250);
     TerminateProcess(GetCurrentProcess(), 1);

@@ -21,9 +21,9 @@ Check out the excellent quick walkthrough from [13Cubed](https://www.13cubed.com
 
 <p align="center"> <a href="https://youtu.be/hjWVUrf7Obk" alt="13Cubed: MemProcFS - This Changes Everything" target="_new"><img src="http://img.youtube.com/vi/hjWVUrf7Obk/0.jpg" height="230"/></a> <a href="https://youtu.be/mca3rLsHuTA?t=952" alt="Disobey 2020 talk - Live Memory Attacks and Forensics" target="_new"><img src="http://img.youtube.com/vi/mca3rLsHuTA/0.jpg" height="230"/></a> <a href="https://www.youtube.com/watch?v=Da_9SV9FA34" alt="Microsoft BlueHatIL 2019 talk - Practical Uses for Hardware-assisted Memory Visualization" target="_new"><img src="http://img.youtube.com/vi/Da_9SV9FA34/0.jpg" height="230"/></a></p>
 
-For additional documentation **please check out the [project wiki](https://github.com/ufrisk/MemProcFS/wiki)** for in-depth detailed information about the file system itself, its API and its plugin modules! For additional information about memory acqusition methods check out the **[LeechCore project](https://github.com/ufrisk/LeechCore/)** or hop into the [#pcileech](https://discord.gg/sEkn3aa) Discord channel!
+For additional documentation **check out the [project wiki](https://github.com/ufrisk/MemProcFS/wiki)** for in-depth detailed information about the file system itself, its API and its plugin modules! For additional information about memory acqusition methods check out the **[LeechCore project](https://github.com/ufrisk/LeechCore/)** or hop into the [PCILeech/MemProcFS](https://discord.gg/pcileech) Discord server!
 
-To get going clone the sources in the repository or download the [latest binaries, modules and configuration files](https://github.com/ufrisk/MemProcFS/releases/latest) from the releases section and **check out the [guide](https://github.com/ufrisk/MemProcFS/wiki).**
+To get going download the [latest binaries, modules and configuration files](https://github.com/ufrisk/MemProcFS/releases/latest) and check out the [guide](https://github.com/ufrisk/MemProcFS/wiki)!
 
 
 
@@ -32,22 +32,22 @@ Installing:
 <b>Get the latest [binaries, modules and configuration files](https://github.com/ufrisk/MemProcFS/releases/latest) from the latest release.</b> Alternatively clone the repository and build from source.
 
 ## Windows
-Mounting the file system requires the <b>Dokany file system library</b> to be installed. Please download and install the latest version of Dokany version 2 at: https://github.com/dokan-dev/dokany/releases/latest
+Mounting the file system requires the <b>Dokany file system library</b> to be installed. Download and install the latest version of Dokany version 2 at: https://github.com/dokan-dev/dokany/releases/latest
 
-To capture live memory (without PCILeech FPGA hardware) download [DumpIt](https://www.comae.com/) and start MemProcFS via DumpIt /LIVEKD mode. Alternatively, get WinPMEM by downloading the most recent signed [WinPMEM driver](https://github.com/Velocidex/c-aff4/tree/master/tools/pmem/resources/winpmem) and place it alongside MemProcFS - detailed instructions in the [LeechCore Wiki](https://github.com/ufrisk/LeechCore/wiki/Device_WinPMEM).
+To capture live memory (without PCILeech FPGA hardware) download [DumpIt](https://www.magnetforensics.com/resources/magnet-dumpit-for-windows) and start MemProcFS via DumpIt /LIVEKD mode. Alternatively, get WinPMEM by downloading the most recent signed [WinPMEM driver](https://github.com/Velocidex/c-aff4/tree/master/tools/pmem/resources/winpmem) and place it alongside MemProcFS - detailed instructions in the [LeechCore Wiki](https://github.com/ufrisk/LeechCore/wiki/Device_WinPMEM).
 
 PCILeech FPGA will require hardware as well as _FTD3XX.dll_ to be dropped alongside the MemProcFS binaries. Please check out the [LeechCore](https://github.com/ufrisk/LeechCore) project for instructions.
 
 ## Linux
-MemProcFS is dependent on packages, please do a `sudo apt-get install libusb-1.0 fuse openssl lz4` before trying out MemProcFS. If building from source please check out the guide about [MemProcFS on Linux](https://github.com/ufrisk/MemProcFS/wiki/_Linux).
+MemProcFS is dependent on packages, do a `sudo apt-get install libusb-1.0 fuse openssl lz4` before trying out MemProcFS. If building from source check out the guide about [MemProcFS on Linux](https://github.com/ufrisk/MemProcFS/wiki/_Linux).
 
 
 
-Extensive Python, Java, C# and C/C++ API:
+Extensive Python, Rust, Java, C# and C/C++ API:
 ===============================
-Include MemProcFS in your [C/C++](https://github.com/ufrisk/MemProcFS/wiki/API_C), [C#](https://github.com/ufrisk/MemProcFS/wiki/API_CSharp), [Java](https://github.com/ufrisk/MemProcFS/wiki/API_Java) or [Python](https://github.com/ufrisk/MemProcFS/wiki/API_Python) programming projects! Everything in MemProcFS is exposed via an easy-to-use API for use in your own projects! The Plugin friendly architecture allows users to easily extend MemProcFS with native C .DLL plugins or Python plugins!
+Include MemProcFS in your [C/C++](https://github.com/ufrisk/MemProcFS/wiki/API_C), [C#](https://github.com/ufrisk/MemProcFS/wiki/API_CSharp), [Java](https://github.com/ufrisk/MemProcFS/wiki/API_Java), [Python](https://github.com/ufrisk/MemProcFS/wiki/API_Python) or [Rust](https://github.com/ufrisk/MemProcFS/wiki/API_Rust) programming projects! Everything in MemProcFS is exposed via an easy-to-use API for use in your own projects! The Plugin friendly architecture allows users to easily extend MemProcFS with C/C++/Rust/Python plugins!
 
-Everything in MemProcFS is exposed as APIs. APIs exist for both C/C++ `vmmdll.h`, C# `vmmsharp.cs`, Java and Python `memprocfs.py`. The file system itself is made available virtually via the API without the need to mount it. SIt is possible to read both virtual process memory as well as physical memory! The example below shows reading 0x20 bytes from physical address 0x1000:
+Everything in MemProcFS is exposed as APIs. APIs exist for both C/C++ `vmmdll.h`, C# `vmmsharp.cs`, Java, Python [pip package](https://pypi.org/project/memprocfs/) and Rust [crate](https://crates.io/crates/memprocfs). The file system itself is made available virtually via the API without the need to mount it. It is possible to read both virtual process memory as well as physical memory! The example below shows reading 0x20 bytes from physical address 0x1000:
 ```
 >>> import memprocfs
 >>> vmm = memprocfs.Vmm(['-device', 'c:/temp/win10_memdump.raw'])
@@ -55,6 +55,8 @@ Everything in MemProcFS is exposed as APIs. APIs exist for both C/C++ `vmmdll.h`
 0000    e9 4d 06 00 01 00 00 00  01 00 00 00 3f 00 18 10   .M..........?...
 0010    00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00   ................
 ```
+
+MemProcFS is available as a Python pip package and it's easy to integrate in your [Jupyter Notebooks](https://github.com/ufrisk/MemProcFS/wiki/API_Python_Jupyter).
 
 
 
@@ -67,12 +69,20 @@ Or register the memory dump file extension with MemProcFS.exe so that the file s
 - mount the memory dump file as default M: <br>`memprocfs.exe -device c:\temp\win10x64-dump.raw`
 - mount the memory dump file as default M: with extra verbosity: <br>`memprocfs.exe -device c:\temp\win10x64-dump.raw -v`
 - mount the memory dump file as default M: and start forensics mode: <br>`memprocfs.exe -device c:\temp\win10x64-dump.raw -forensic 1`
+- mount the memory dump file as default M: and start forensics mode with a yara scan: <br>`memprocfs.exe -device c:\temp\win10x64-dump.raw -forensic 1 -forensic-yara-rules c:\yara\rules\windows_malware_index.yar`
 - mount the memory dump file as /home/pi/mnt/ on Linux: <br>`./memprocfs -mount /home/pi/linux -device /dumps/win10x64-dump.raw`
 - mount the memory dump file as S: <br>`memprocfs.exe -mount s -device c:\temp\win10x64-dump.raw`
-- mount live target memory, in verbose read-only mode, with DumpIt in /LIVEKD mode: <br>`DumpIt.exe /LIVEKD /A memprocfs.exe /C "-v"`
 - mount live target memory, in read-only mode, with WinPMEM driver: <br>`memprocfs.exe -device pmem`
 - mount live target memory, in read/write mode, with PCILeech FPGA memory acquisition device: <br>`memprocfs.exe -device fpga -memmap auto`
 - mount a memory dump with a corresponding page files: <br>`memprocfs.exe -device unknown-x64-dump.raw -pagefile0 pagefile.sys -pagefile1 swapfile.sys`
+
+
+
+PCILeech and MemProcFS community:
+=========
+Find all this a bit overwhelming? Or just want to ask a quick question? Join the PCILeech and MemProcFS DMA community server at Discord!
+
+<a href="https://discord.gg/pcileech"><img src="https://discord.com/api/guilds/1155439643395883128/widget.png?style=banner3"/></a>
 
 
 
@@ -86,7 +96,7 @@ Detailed build instructions may be found in the [Wiki](https://github.com/ufrisk
 
 License:
 ========
-The project source code is released under: GNU Affero General Public License v3.0. Some bundled dependencies and plugins are released under GPLv3. Some bundled Microsoft redistributable binaries are released under separate licenses. Alternative closed-source licensing may be possible upon request.
+The project source code is released under: GNU Affero General Public License v3.0. Some bundled dependencies and plugins are released under GPLv3. Some bundled Microsoft redistributable binaries are released under separate licenses. Alternative licensing may be possible upon request.
 
 
 
@@ -99,7 +109,7 @@ PCILeech, MemProcFS and LeechCore are open source but not open contribution. PCI
 Links:
 ======
 * Twitter: [![Twitter](https://img.shields.io/twitter/follow/UlfFrisk?label=UlfFrisk&style=social)](https://twitter.com/intent/follow?screen_name=UlfFrisk)
-* Discord: [![Discord | Porchetta Industries](https://img.shields.io/discord/736724457258745996.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/sEkn3aa)
+* Discord: [![Discord | PCILeech/MemProcFS](https://img.shields.io/discord/1155439643395883128.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/pcileech)
 * PCILeech: https://github.com/ufrisk/pcileech
 * PCILeech FPGA: https://github.com/ufrisk/pcileech-fpga
 * LeechCore: https://github.com/ufrisk/LeechCore
@@ -111,7 +121,6 @@ Links:
 
 Links - Related Projects:
 =========================
-* MemProcFSHunter: https://github.com/memprocfshunt/MemProcFSHunter
 * MemProcFS-Analyzer: https://github.com/evild3ad/MemProcFS-Analyzer
 
 
@@ -138,18 +147,18 @@ v1.0
 v1.1-v4.9
 * Various updates. Please see individual relases for more information.
 
-[v5.0](https://github.com/ufrisk/MemProcFS/releases/tag/v5.0)
+v5.0
 * Major release with new features to support parallel analysis tasks.
 * Breaking API changes and major updates.
 * Extended forensic analysis capabilties and [CSV file](https://github.com/ufrisk/MemProcFS/wiki/FS_Forensic_CSV) support.
 * Linux plugin support.
 * New [Java API](https://github.com/ufrisk/MemProcFS/wiki/API_Java).
 
-[v5.1](https://github.com/ufrisk/MemProcFS/releases/tag/v5.1)
+v5.1
 * Support for Windows 11 22H2.
 * Text & Binary-only views at '/misc/view/'.
 
-[v5.2](https://github.com/ufrisk/MemProcFS/releases/tag/v5.2)
+v5.2
 * Bug fixes.
 * [Virtual Machine support](https://github.com/ufrisk/MemProcFS/wiki/VM).
 * [ARM64 Windows support](https://github.com/ufrisk/MemProcFS/wiki/_ARM64).
@@ -157,9 +166,8 @@ v1.1-v4.9
 * Device tree information in /sys/drivers.
 * Linux feature additions: memcompress and token.
 * Manual download of debug symbols (PDBs) on offline systems (Windows only).
-</details>
 
-[v5.3](https://github.com/ufrisk/MemProcFS/releases/tag/v5.3)
+v5.3
 * Bug fixes and performance optimizations.
 * PE forwarded functions.
 * PE version information.
@@ -168,5 +176,51 @@ v1.1-v4.9
 * Hyper-V Container/Sandbox support.
 * Windows Hypervisor Platform support (VMware and VirtualBox on Hyper-V).
 
+v5.4
+* Rust API support.
+* Debug symbol support when running on Linux.
+
+v5.5
+* [Findevil](https://github.com/ufrisk/MemProcFS/wiki/FS_FindEvil): New thread-based detections. Findevil is now forensic mode only.
+* [Jupyter Notebook example](https://github.com/ufrisk/MemProcFS/wiki/API_Python_Jupyter)
+* Yara support in [forensics mode](https://github.com/ufrisk/MemProcFS/wiki/FS_Forensic_Yara) and [search](https://github.com/ufrisk/MemProcFS/wiki/FS_YaraSearch).
+
+v5.6
+* Bug fixes, performance optimizations and minor updates.
+* [files](https://github.com/ufrisk/MemProcFS/wiki/FS_Forensic_Files) plugin in forensics mode - showing files with recoverable contents.
+* Built-in yara rules for [Findevil](https://github.com/ufrisk/MemProcFS/wiki/FS_FindEvil) in forensics mode from [Elastic Security](https://github.com/elastic/protections-artifacts).<br>Activate by accepting the Elastic license 2.0 by start-up option [`-license-accept-elastic-license-2.0`](https://github.com/ufrisk/MemProcFS/wiki/_CommandLine#-license-accept-elastic-license-2.0).
+
+v5.7
+* Bug fixes.
+* Rust API updates.
+* New FindEvil Yara detections.
+* Yara scans of file objects (increased chance of vulnerable driver detection by FindEvil).
+* Improved FPGA performance for smaller reads.
+* Improved [MemProcFS remoting](https://github.com/ufrisk/MemProcFS/wiki/_Remoting) via a remote [LeechAgent](https://github.com/ufrisk/LeechCore/wiki/LeechAgent). Full MemProcFS remote support over SMB - tcp/445. Perfect for memory forensics Incident Response (IR)!
+</details>
+
+v5.8
+* LeechCore API updates for C/C++, C#, Rust, Python, Java.
+* Support for analyzing ARM64 Windows memory.
+
+[v5.9](https://github.com/ufrisk/MemProcFS/releases/tag/v5.9)
+* Bug fixes.
+* Module improvements: ntfs, procinfo, web.
+* C# API: improvements.
+* Java API: support for java.lang.foreign (JDK21+) for efficient memory accesses.
+* Linux PCIe FPGA performance improvements.
+* FindEvil: Triggered Yara rules are now shown.
+* FindEvil: AV detections from Windows Defender residing on the analyzed system.
+* Python API: new functionality (multi-read, type-read) and improved scatter read performance.
+* Support for Proxmox memory dump files.
+
 Latest:
-* Microsoft symbol server support on Linux.
+* Bug fixes.
+* Added named _SECTION objects to VAD map.
+* `-memmap auto` improvements.
+* Hibernation file support.
+* FindEvil: UM APC detection. Thanks [@thejanit0r](https://github.com/thejanit0r) for the contribution.
+* [Sysinfo module](https://github.com/ufrisk/MemProcFS/wiki/FS_Sys_Sysinfo) for easy-to-read system information.
+* [Eventlog module](https://github.com/ufrisk/MemProcFS/wiki/FS_Misc_Eventlog) for convenient access to event log files.
+* Binary search API now allows for up to 16M search terms (up from previous 16).
+* Prefetch parsing.

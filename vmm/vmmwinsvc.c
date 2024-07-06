@@ -1,6 +1,6 @@
 // vmmwinsvc.c : implementation of functionality related to Windows service manager (SCM).
 //
-// (c) Ulf Frisk, 2020-2023
+// (c) Ulf Frisk, 2020-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmwinsvc.h"
@@ -415,8 +415,8 @@ BOOL VmmWinSvc_ResolveStrAll(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcessSvc, _
             fProcessUser =
                 pe->dwPID &&
                 (pObProcessUser = VmmProcessGetEx(H, NULL, pe->dwPID, VMM_FLAG_PROCESS_TOKEN)) &&
-                pObProcessUser->win.TOKEN.fInitialized && pObProcessUser->win.TOKEN.fSidUserValid &&
-                VmmWinUser_GetName(H, &pObProcessUser->win.TOKEN.SidUser.SID, usz, sizeof(usz), NULL);
+                pObProcessUser->win.Token && pObProcessUser->win.Token->fSidUserValid &&
+                VmmWinUser_GetName(H, &pObProcessUser->win.Token->SidUser.SID, usz, sizeof(usz), NULL);
             ObStrMap_PushPtrUU(pObStrMap, fProcessUser ? usz : NULL, &pe->uszUserAcct, NULL);
             Ob_DECREF_NULL(&pObProcessUser);
         }

@@ -1,6 +1,6 @@
 // vmmpyc_virtualmemory.c : implementation of process virtual memory for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -21,6 +21,14 @@ VmmPycVirtualMemory_read_scatter(PyObj_VirtualMemory *self, PyObject *args)
 {
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VirtualMemory.read_scatter(): Not initialized."); }
     return VmmPyc_MemReadScatter(self->pyVMM->hVMM, self->dwPID, "VirtualMemory.read_scatter()", args);
+}
+
+// ([[ULONG64, STR], ..]) -> [T1, T2, ..]
+static PyObject*
+VmmPycVirtualMemory_read_type(PyObj_VirtualMemory *self, PyObject *args)
+{
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VirtualMemory.read_type(): Not initialized."); }
+    return VmmPyc_MemReadType(self->pyVMM->hVMM, self->dwPID, "VirtualMemory.read_type()", args);
 }
 
 // (ULONG64, PBYTE) -> None
@@ -54,7 +62,7 @@ VmmPycVirtualMemory_scatter_initialize(PyObj_VirtualMemory *self, PyObject *args
 {
     DWORD dwReadFlags = 0;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VirtualMemory.scatter_initialize(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "|k", &dwReadFlags)) { // borrowed reference
+    if(!PyArg_ParseTuple(args, "|I", &dwReadFlags)) { // borrowed reference
         return PyErr_Format(PyExc_RuntimeError, "VirtualMemory.scatter_initialize(): Illegal argument.");
     }
     return (PyObject*)VmmPycScatterMemory_InitializeInternal(self->pyVMM, NULL, self->dwPID, dwReadFlags);
@@ -94,7 +102,8 @@ static void
 VmmPycVirtualMemory_dealloc(PyObj_VirtualMemory *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)
@@ -104,6 +113,7 @@ BOOL VmmPycVirtualMemory_InitializeType(PyObject *pModule)
         {"virt2phys", (PyCFunction)VmmPycVirtualMemory_virt2phys, METH_VARARGS, "Translate virtual address to physical address."},
         {"read", (PyCFunction)VmmPycVirtualMemory_read, METH_VARARGS, "Read contigious virtual memory."},
         {"read_scatter", (PyCFunction)VmmPycVirtualMemory_read_scatter, METH_VARARGS, "Read scatter virtual 4kB memory pages."},
+        {"read_type", (PyCFunction)VmmPycVirtualMemory_read_type, METH_VARARGS, "Read user-defined type(s)."},
         {"write", (PyCFunction)VmmPycVirtualMemory_write, METH_VARARGS, "Write contigious virtual memory."},
         {"scatter_initialize", (PyCFunction)VmmPycVirtualMemory_scatter_initialize, METH_VARARGS, "Initialize a Scatter memory object used for efficient reads."},
         {NULL, NULL, 0, NULL}

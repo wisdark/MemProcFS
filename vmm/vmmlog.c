@@ -1,6 +1,6 @@
 // vmmlog.c : implementation of the vmm logging functionality.
 //
-// (c) Ulf Frisk, 2022-2023
+// (c) Ulf Frisk, 2022-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmlog.h"
@@ -21,13 +21,14 @@ static LPCSTR VMMLOG_LEVEL_STR[] = {
 };
 
 typedef struct tdVMMLOG_MODULE_MODULEINFO {
-    DWORD dwMID;            // module id
+    DWORD MID;            // module id
     VMMLOG_LEVEL dwLevelD;  // log level display (other than default)
     VMMLOG_LEVEL dwLevelF;  // log level file    (other than default)
     LPSTR uszName;
 } VMMLOG_CONTEXT_MODULEINFO, *PVMMLOG_CONTEXT_MODULEINFO;
 
 typedef struct tdVMMLOG_CONTEXT {
+    BOOL fFileFlush;
     FILE* pFile;
     VMMLOG_LEVEL dwLevelD;      // log level display (default)
     VMMLOG_LEVEL dwLevelF;      // log level file    (default)
@@ -40,14 +41,14 @@ typedef struct tdVMMLOG_CONTEXT {
 /*
 * Helper function to get a log module info object.
 */
-inline PVMMLOG_CONTEXT_MODULEINFO VmmLog_GetModuleInfo(_In_ VMM_HANDLE H, _In_ DWORD dwMID)
+__forceinline PVMMLOG_CONTEXT_MODULEINFO VmmLog_GetModuleInfo(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
     if(!ctxLog) { return NULL; }
-    if(dwMID & 0x80000000) {
-        return (dwMID <= MID_MAX) ? &ctxLog->CoreInfo[dwMID & 0x7fffffff] : NULL;
+    if(MID & 0x80000000) {
+        return (MID <= MID_MAX) ? &ctxLog->CoreInfo[MID & 0x7fffffff] : NULL;
     } else {
-        return (dwMID < ctxLog->iNextMID) ? &ctxLog->ModuleInfo[dwMID] : NULL;
+        return (MID < ctxLog->iNextMID) ? &ctxLog->ModuleInfo[MID] : NULL;
     }
 }
 
@@ -59,14 +60,14 @@ inline PVMMLOG_CONTEXT_MODULEINFO VmmLog_GetModuleInfo(_In_ VMM_HANDLE H, _In_ D
 VOID VmmLog_Close(_In_ VMM_HANDLE H)
 {
     PVMMLOG_CONTEXT_MODULEINFO pmi;
-    DWORD dwMID;
+    VMM_MODULE_ID MID;
     H->logfilter = (DWORD)LOGLEVEL_NONE;
     if(H->log) {
         if(H->log->pFile) {
             fclose(H->log->pFile);
         }
-        for(dwMID = 0; dwMID < H->log->iNextMID; dwMID++) {
-            if((pmi = VmmLog_GetModuleInfo(H, dwMID))) {
+        for(MID = 0; MID < H->log->iNextMID; MID++) {
+            if((pmi = VmmLog_GetModuleInfo(H, MID))) {
                 LocalFree(pmi->uszName);
             }
         }
@@ -78,17 +79,17 @@ VOID VmmLog_Close(_In_ VMM_HANDLE H)
 /*
 * Get the log level for either display (on-screen) or file.
 * -- H
-* -- dwMID = specify MID to get specific level override (i.e. not default MID)
+* -- MID = specify MID to get specific level override (i.e. not default MID)
 * -- fDisplay
 * -- return
 */
-VMMLOG_LEVEL VmmLog_LevelGet(_In_ VMM_HANDLE H, _In_opt_ DWORD dwMID, _In_ BOOL fDisplay)
+VMMLOG_LEVEL VmmLog_LevelGet(_In_ VMM_HANDLE H, _In_opt_ VMM_MODULE_ID MID, _In_ BOOL fDisplay)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
     PVMMLOG_CONTEXT_MODULEINFO pmi;
     if(!ctxLog) { return LOGLEVEL_NONE; }
-    if(dwMID) {
-        pmi = VmmLog_GetModuleInfo(H, dwMID);
+    if(MID) {
+        pmi = VmmLog_GetModuleInfo(H, MID);
         if(!pmi) { return LOGLEVEL_NONE; }
         return fDisplay ? pmi->dwLevelD : pmi->dwLevelF;
     } else {
@@ -99,18 +100,18 @@ VMMLOG_LEVEL VmmLog_LevelGet(_In_ VMM_HANDLE H, _In_opt_ DWORD dwMID, _In_ BOOL 
 /*
 * Set the log level for either display (on-screen) or file.
 * -- H
-* -- dwMID = specify MID (other than 0) to set specific module level override.
+* -- MID = specify MID (other than 0) to set specific module level override.
 * -- dwLogLevel
 * -- fDisplay = TRUE(display), FALSE(file)
 * -- fSetOrIncrease = TRUE(set), FALSE(increase)
 */
-VOID VmmLog_LevelSet(_In_ VMM_HANDLE H, _In_opt_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_ BOOL fDisplay, _In_ BOOL fSetOrIncrease)
+VOID VmmLog_LevelSet(_In_ VMM_HANDLE H, _In_opt_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel, _In_ BOOL fDisplay, _In_ BOOL fSetOrIncrease)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
     PVMMLOG_CONTEXT_MODULEINFO pmi = NULL;
     if(!ctxLog || (dwLogLevel < 0) || (dwLogLevel > LOGLEVEL_ALL)) { return; }
-    if(dwMID) {
-        if(!(pmi = VmmLog_GetModuleInfo(H, dwMID))) { return; }
+    if(MID) {
+        if(!(pmi = VmmLog_GetModuleInfo(H, MID))) { return; }
         if(fDisplay) {
             pmi->dwLevelD = fSetOrIncrease ? dwLogLevel : max(dwLogLevel, pmi->dwLevelD);
         } else {
@@ -121,12 +122,12 @@ VOID VmmLog_LevelSet(_In_ VMM_HANDLE H, _In_opt_ DWORD dwMID, _In_ VMMLOG_LEVEL 
             ctxLog->dwLevelMID = max(ctxLog->dwLevelMID, dwLogLevel);
         } else {
             ctxLog->dwLevelMID = 0;
-            for(dwMID = 1; dwMID < ctxLog->iNextMID; dwMID++) {
-                pmi = VmmLog_GetModuleInfo(H, dwMID);
+            for(MID = 1; MID < ctxLog->iNextMID; MID++) {
+                pmi = VmmLog_GetModuleInfo(H, MID);
                 ctxLog->dwLevelMID = max(ctxLog->dwLevelMID, max(pmi->dwLevelD, pmi->dwLevelF));
             }
-            for(dwMID = MID_NA; dwMID <= MID_MAX; dwMID++) {
-                pmi = VmmLog_GetModuleInfo(H, dwMID);
+            for(MID = MID_NA; MID <= MID_MAX; MID++) {
+                pmi = VmmLog_GetModuleInfo(H, MID);
                 ctxLog->dwLevelMID = max(ctxLog->dwLevelMID, max(pmi->dwLevelD, pmi->dwLevelF));
             }
         }
@@ -146,7 +147,8 @@ VOID VmmLog_LevelSet(_In_ VMM_HANDLE H, _In_opt_ DWORD dwMID, _In_ VMMLOG_LEVEL 
 VOID VmmLog_LevelRefresh(_In_ VMM_HANDLE H)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
-    DWORD i, dwMID, dwTokenMID;
+    VMM_MODULE_ID MID;
+    DWORD i, dwTokenMID;
     PVMMLOG_CONTEXT_MODULEINFO pmi;
     CHAR ch, szModuleName[9], szTokenBuffer[MAX_PATH];
     LPSTR szToken, szTokenInitial, szTokenContext = NULL;
@@ -156,20 +158,20 @@ VOID VmmLog_LevelRefresh(_In_ VMM_HANDLE H)
     if(!ctxLog) {
         H->log = LocalAlloc(LMEM_ZEROINIT, sizeof(VMMLOG_CONTEXT));
         if(!(ctxLog = H->log)) { return; }
-        for(dwMID = MID_NA; dwMID <= MID_MAX; dwMID++) {
-            pmi = VmmLog_GetModuleInfo(H, dwMID);
-            pmi->dwMID = dwMID;
-            pmi->uszName = (LPSTR)VMMLOG_MID_STR[dwMID & 0x7fffffff];
+        for(MID = MID_NA; MID <= MID_MAX; MID++) {
+            pmi = VmmLog_GetModuleInfo(H, MID);
+            pmi->MID = MID;
+            pmi->uszName = (LPSTR)VMMLOG_MID_STR[MID & 0x7fffffff];
         }
     }
     // clear module overrides (if any):
-    for(dwMID = 1; dwMID < ctxLog->iNextMID; dwMID++) {
-        pmi = VmmLog_GetModuleInfo(H, dwMID);
+    for(MID = 1; MID < ctxLog->iNextMID; MID++) {
+        pmi = VmmLog_GetModuleInfo(H, MID);
         pmi->dwLevelD = LOGLEVEL_NONE;
         pmi->dwLevelF = LOGLEVEL_NONE;
     }
-    for(dwMID = MID_NA; dwMID <= MID_MAX; dwMID++) {
-        pmi = VmmLog_GetModuleInfo(H, dwMID);
+    for(MID = MID_NA; MID <= MID_MAX; MID++) {
+        pmi = VmmLog_GetModuleInfo(H, MID);
         pmi->dwLevelD = LOGLEVEL_NONE;
         pmi->dwLevelF = LOGLEVEL_NONE;
     }
@@ -195,6 +197,11 @@ VOID VmmLog_LevelRefresh(_In_ VMM_HANDLE H)
         szTokenInitial = NULL;
         dwTokenMID = 0;
         fModuleName = FALSE;
+        // parse file flush option (if any):
+        if(!_stricmp(szToken, "fflush")) {
+            ctxLog->fFileFlush = TRUE;
+            continue;
+        }
         // parse file or display (default):
         if((szToken[0] == 'f') && (szToken[1] == ':')) {
             if(!ctxLog->pFile) { continue; }
@@ -220,17 +227,17 @@ VOID VmmLog_LevelRefresh(_In_ VMM_HANDLE H)
             i++;
         } 
         if(fModuleName) {
-            for(dwMID = 1; dwMID < ctxLog->iNextMID; dwMID++) {
-                pmi = VmmLog_GetModuleInfo(H, dwMID);
+            for(MID = 1; MID < ctxLog->iNextMID; MID++) {
+                pmi = VmmLog_GetModuleInfo(H, MID);
                 if(pmi->uszName && !_stricmp(pmi->uszName, szModuleName)) {
-                    dwTokenMID = dwMID;
+                    dwTokenMID = MID;
                     break;
                 }
             }
-            for(dwMID = MID_NA; dwMID <= MID_MAX; dwMID++) {
-                pmi = VmmLog_GetModuleInfo(H, dwMID);
+            for(MID = MID_NA; MID <= MID_MAX; MID++) {
+                pmi = VmmLog_GetModuleInfo(H, MID);
                 if(pmi->uszName && !_stricmp(pmi->uszName, szModuleName)) {
-                    dwTokenMID = dwMID;
+                    dwTokenMID = MID;
                     break;
                 }
             }
@@ -248,47 +255,47 @@ VOID VmmLog_LevelRefresh(_In_ VMM_HANDLE H)
 * Register a new module ID (MID) with the log database.
 * This function should be called in a single-threaded context by the plugin manager.
 * -- H
-* -- dwMID = the module ID (MID) to register
+* -- MID = the module ID (MID) to register
 * -- uszModuleName
 * -- fExternal = externally loaded module (dll/so).
 */
-VOID VmmLog_RegisterModule(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ LPSTR uszModuleName, _In_ BOOL fExternal)
+VOID VmmLog_RegisterModule(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ LPCSTR uszModuleName, _In_ BOOL fExternal)
 {
     PVMMLOG_CONTEXT_MODULEINFO pmi;
     if(!H->log) { return; }
-    if(dwMID >= VMMLOG_MID_MODULE_MAX) { return; }
-    pmi = H->log->ModuleInfo + dwMID;
+    if(MID >= VMMLOG_MID_MODULE_MAX) { return; }
+    pmi = H->log->ModuleInfo + MID;
     if(pmi->uszName) {
         LocalFree(pmi->uszName);
         ZeroMemory(pmi, sizeof(VMMLOG_CONTEXT_MODULEINFO));
     }
     if(CharUtil_UtoU(uszModuleName, 8, NULL, 0, &pmi->uszName, NULL, CHARUTIL_FLAG_ALLOC)) {
     }
-    pmi->dwMID = dwMID;
-    H->log->iNextMID = dwMID + 1;
+    pmi->MID = MID;
+    H->log->iNextMID = MID + 1;
 }
 
 /*
 * Log a message "printf" style. Whether the message is displayed and/or saved
 * to log file depends on the internal logging setup.
 * -- H
-* -- dwMID = module ID (MID)
+* -- MID = module ID (MID)
 * -- dwLogLevel = log level as defined by LOGLEVEL_*
 * -- uszFormat
 * -- ...
 */
-VOID VmmLogEx(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_z_ _Printf_format_string_ LPSTR uszFormat, ...)
+VOID VmmLogEx(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel, _In_z_ _Printf_format_string_ LPCSTR uszFormat, ...)
 {
     va_list arglist;
     va_start(arglist, uszFormat);
-    VmmLogEx2(H, dwMID, dwLogLevel, uszFormat, arglist);
+    VmmLogEx2(H, MID, dwLogLevel, uszFormat, arglist);
     va_end(arglist);
 }
 
 /*
 * Log a message "printf" style followed by a hexascii printout.
 * -- H
-* -- dwMID = module ID (MID)
+* -- MID = module ID (MID)
 * -- dwLogLevel = log level as defined by LOGLEVEL_*
 * -- pb = binary to log
 * -- cb = size of binary to log
@@ -296,7 +303,7 @@ VOID VmmLogEx(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel,
 * -- uszFormat
 * -- ...
 */
-VOID VmmLogHexAsciiEx(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _In_ DWORD cbInitialOffset, _In_z_ _Printf_format_string_ LPSTR uszFormat, ...)
+VOID VmmLogHexAsciiEx(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel, _In_reads_(cb) PBYTE pb, _In_ DWORD cb, _In_ DWORD cbInitialOffset, _In_z_ _Printf_format_string_ LPCSTR uszFormat, ...)
 {
     LPSTR usz;
     va_list arglist;
@@ -320,7 +327,7 @@ VOID VmmLogHexAsciiEx(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwL
     }
     // 4: log
     va_start(arglist, uszFormat);
-    VmmLogEx2(H, dwMID, dwLogLevel, usz, arglist);
+    VmmLogEx2(H, MID, dwLogLevel, usz, arglist);
     va_end(arglist);
     LocalFree(usz);
 }
@@ -328,11 +335,11 @@ VOID VmmLogHexAsciiEx(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwL
 /*
 * Check whether the MID/LogLevel will log to any output.
 * -- H
-* -- dwMID = module ID (MID)
+* -- MID = module ID (MID)
 * -- dwLogLevel = log level as defined by LOGLEVEL_*
 * -- return = TRUE(will log), FALSE(will NOT log).
 */
-BOOL VmmLogIsActive(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel)
+BOOL VmmLogIsActive(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
     PVMMLOG_CONTEXT_MODULEINFO pmi;
@@ -340,7 +347,7 @@ BOOL VmmLogIsActive(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLog
     if(!ctxLog) { return FALSE; }
     // sanity checks, get module info object and check if logs should happen to display/file:
     if((dwLogLevel < LOGLEVEL_NONE) || (dwLogLevel > LOGLEVEL_ALL) || (dwLogLevel > (VMMLOG_LEVEL)H->logfilter)) { return FALSE; }
-    if(!(pmi = VmmLog_GetModuleInfo(H, dwMID))) { return FALSE; }
+    if(!(pmi = VmmLog_GetModuleInfo(H, MID))) { return FALSE; }
     fD = ((dwLogLevel <= ctxLog->dwLevelD) || (dwLogLevel <= pmi->dwLevelD));                       // log to display
     fF = ((dwLogLevel <= ctxLog->dwLevelF) || (dwLogLevel <= pmi->dwLevelF)) && ctxLog->pFile;      // log to file
     return fD || fF;
@@ -350,12 +357,12 @@ BOOL VmmLogIsActive(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLog
 * Log a message using a va_list. Whether the message is displayed and/or saved
 * to log file depends on the internal logging setup.
 * -- H
-* -- dwMID = module ID (MID)
+* -- MID = module ID (MID)
 * -- dwLogLevel = log level as defined by LOGLEVEL_*
 * -- uszFormat
 * -- arglist
 */
-VOID VmmLogEx2(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel, _In_z_ _Printf_format_string_ LPSTR uszFormat, va_list arglist)
+VOID VmmLogEx2(_In_ VMM_HANDLE H, _In_ VMM_MODULE_ID MID, _In_ VMMLOG_LEVEL dwLogLevel, _In_z_ _Printf_format_string_ LPCSTR uszFormat, va_list arglist)
 {
     PVMMLOG_CONTEXT ctxLog = H->log;
     PVMMLOG_CONTEXT_MODULEINFO pmi;
@@ -369,7 +376,7 @@ VOID VmmLogEx2(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel
     if(!ctxLog) { return; }
     // sanity checks, get module info object and check if logs should happen to display/file:
     if((dwLogLevel < LOGLEVEL_NONE) || (dwLogLevel > LOGLEVEL_ALL) || (dwLogLevel > (VMMLOG_LEVEL)H->logfilter)) { return; }
-    if(!(pmi = VmmLog_GetModuleInfo(H, dwMID))) { return; }
+    if(!(pmi = VmmLog_GetModuleInfo(H, MID))) { return; }
     fD = ((dwLogLevel <= ctxLog->dwLevelD) || (dwLogLevel <= pmi->dwLevelD));                    // log to display
     fF = ((dwLogLevel <= ctxLog->dwLevelF) || (dwLogLevel <= pmi->dwLevelF)) && ctxLog->pFile;    // log to file
     if(!fD && !fF) { return; }
@@ -392,11 +399,15 @@ VOID VmmLogEx2(_In_ VMM_HANDLE H, _In_ DWORD dwMID, _In_ VMMLOG_LEVEL dwLogLevel
     // log to display
     if(fD) {
         printf("%-10s %s\n", szHead, uszBuffer);
+        fflush(stdout);
     }
     // log to file
     if(fF) {
         Util_FileTime2String(Util_FileTimeNow(), szTime);
         fprintf(ctxLog->pFile, "%s %s %-10s %s\n", szTime, VMMLOG_LEVEL_STR[dwLogLevel], szHead, uszBuffer);
+        if(ctxLog->fFileFlush) {
+            fflush(ctxLog->pFile);
+        }
     }
     // cleanup
     if(uszBuffer != uszBufferSmall) { LocalFree(uszBuffer); }

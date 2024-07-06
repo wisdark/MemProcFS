@@ -4,7 +4,7 @@
 // an unknown amount of keys to be counted.
 // The ObCounter is an object manager object and must be DECREF'ed when required.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "ob.h"
@@ -198,6 +198,27 @@ VOID _ObCounter_Remove(_In_ POB_COUNTER pm, _In_ DWORD iEntry)
         _ObCounter_InsertHash(pm, iEntry);
     }
     pm->c--;
+}
+
+/*
+* Clear the ObCounter by removing all counts and keys.
+* NB! underlying allocated memory will remain unchanged.
+* -- pm
+* -- return = clear was successful - always true.
+*/
+_Success_(return)
+BOOL ObCounter_Clear(_In_opt_ POB_COUNTER pc)
+{
+    if(!OB_COUNTER_IS_VALID(pc) || (pc->c <= 1)) { return TRUE; }
+    AcquireSRWLockExclusive(&pc->LockSRW);
+    if(pc->c <= 1) {
+        ReleaseSRWLockExclusive(&pc->LockSRW);
+        return TRUE;
+    }
+    ZeroMemory(pc->pHashMapKey, 4ULL * pc->cHashMax);
+    pc->c = 1;  // item zero is reserved - hence the initialization of count to 1
+    ReleaseSRWLockExclusive(&pc->LockSRW);
+    return TRUE;
 }
 
 
@@ -396,6 +417,23 @@ QWORD _ObCounter_Del(_In_ POB_COUNTER pc, _In_ QWORD k)
     return v;
 }
 
+
+_Success_(return != 0)
+QWORD _ObCounter_RetrieveAndRemoveByEntryIndex(_In_ POB_COUNTER pc, _In_ DWORD iEntry, _Out_opt_ PQWORD pKey)
+{
+    QWORD v;
+    POB_COUNTER_ENTRY pe;
+    if((pe = _ObCounter_GetFromIndex(pc, iEntry))) {
+        v = pe->v;
+        if(pKey) { *pKey = pe->k; }
+        _ObCounter_Remove(pc, iEntry);
+        return v;
+    } else {
+        if(pKey) { *pKey = 0; }
+        return 0;
+    }
+}
+
 /*
 * Set the count of a specific key.
 * -- pc
@@ -466,6 +504,29 @@ QWORD ObCounter_Dec(_In_opt_ POB_COUNTER pc, _In_ QWORD k)
 QWORD ObCounter_Sub(_In_opt_ POB_COUNTER pc, _In_ QWORD k, _In_ QWORD v)
 {
     return ObCounter_Add(pc, k, (QWORD)(0-v));
+}
+
+/*
+* Remove the "last" count.
+* -- pc
+* -- return = success: count, fail: 0.
+*/
+_Success_(return != 0)
+QWORD ObCounter_Pop(_In_opt_ POB_COUNTER pc)
+{
+    OB_COUNTER_CALL_SYNCHRONIZED_IMPLEMENTATION_WRITE(pc, QWORD, 0, _ObCounter_RetrieveAndRemoveByEntryIndex(pc, pc->c - 1, NULL))
+}
+
+/*
+* Remove the "last" count and return it and its key.
+* -- pc
+* -- pKey
+* -- return = success: count, fail: 0.
+*/
+_Success_(return != 0)
+QWORD ObCounter_PopWithKey(_In_opt_ POB_COUNTER pc, _Out_opt_ PQWORD pKey)
+{
+    OB_COUNTER_CALL_SYNCHRONIZED_IMPLEMENTATION_WRITE(pc, QWORD, 0, _ObCounter_RetrieveAndRemoveByEntryIndex(pc, pc->c - 1, pKey))
 }
 
 

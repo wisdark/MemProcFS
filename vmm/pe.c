@@ -2,7 +2,7 @@
 //        in virtual address space. This may mostly (but not exclusively) be
 //        used by Windows functionality.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmm.h"
@@ -64,7 +64,7 @@ BOOL PE_GetTimeDateStampCheckSum(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, 
 }
 
 _Success_(return)
-BOOL PE_GetThunkInfoIAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPSTR szImportModuleName, _In_ LPSTR szImportProcName, _Out_ PPE_THUNKINFO_IAT pThunkInfoIAT)
+BOOL PE_GetThunkInfoIAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPCSTR szImportModuleName, _In_ LPCSTR szImportProcName, _Out_ PPE_THUNKINFO_IAT pThunkInfoIAT)
 {
     BYTE pbModuleHeader[0x1000] = { 0 };
     PIMAGE_NT_HEADERS64 ntHeader64;
@@ -158,7 +158,7 @@ fail:
 }
 
 _Success_(return)
-BOOL PE_GetThunkInfoEAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPSTR szProcName, _Out_ PPE_THUNKINFO_EAT pThunkInfoEAT)
+BOOL PE_GetThunkInfoEAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPCSTR szProcName, _Out_ PPE_THUNKINFO_EAT pThunkInfoEAT)
 {
     BYTE pbModuleHeader[0x1000] = { 0 };
     PIMAGE_NT_HEADERS32 ntHeader32;
@@ -217,7 +217,7 @@ cleanup:
     return FALSE;
 }
 
-QWORD PE_GetProcAddress(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPSTR lpProcName)
+QWORD PE_GetProcAddress(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPCSTR lpProcName)
 {
     PE_THUNKINFO_EAT oThunkInfoEAT = { 0 };
     PE_GetThunkInfoEAT(H, pProcess, vaModuleBase, lpProcName, &oThunkInfoEAT);
@@ -233,6 +233,15 @@ WORD PE_SectionGetNumberOfEx(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_
     // load nt header either by using optionally supplied module header or by fetching from memory.
     ntHeader = pbModuleHeaderOpt ? PE_HeaderGetVerify(H, pProcess, 0, pbModuleHeaderOpt, &f32) : PE_HeaderGetVerify(H, pProcess, vaModuleBase, pbModuleHeader, &f32);
     if(!ntHeader) { return 0; }
+    if(f32) {
+        if(((PIMAGE_NT_HEADERS32)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            return 1;       // LowAlign
+        }
+    } else {
+        if(((PIMAGE_NT_HEADERS64)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            return 1;       // LowAlign
+        }
+    }
     cSections = f32 ? ((PIMAGE_NT_HEADERS32)ntHeader)->FileHeader.NumberOfSections : ((PIMAGE_NT_HEADERS64)ntHeader)->FileHeader.NumberOfSections;
     if(cSections > 0x40) { return 0; }
     return cSections;
@@ -241,6 +250,26 @@ WORD PE_SectionGetNumberOfEx(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_
 WORD PE_SectionGetNumberOf(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_opt_ QWORD vaModuleBase)
 {
     return PE_SectionGetNumberOfEx(H, pProcess, vaModuleBase, NULL);
+}
+
+/*
+* Internal helper function to set a fake 'LowAlign' section header.
+* This may be used to spoof PE section headers.
+* Info at:
+*    - https://secret.club/2023/06/05/spoof-pe-sections.html
+*    - https://reverseengineering.stackexchange.com/questions/4457/what-implications-has-the-low-alignment-mode-of-a-pe-file
+* -- dwSizeOfImage
+* -- pSection
+* -- return = always returns TRUE.
+*/
+BOOL PE_SectionSetLowAlign(_In_ DWORD dwSizeOfImage, _Out_ PIMAGE_SECTION_HEADER pSection)
+{
+    ZeroMemory(pSection, sizeof(IMAGE_SECTION_HEADER));
+    memcpy(pSection->Name, "LOWALIGN", 8);
+    pSection->SizeOfRawData = dwSizeOfImage;
+    pSection->Misc.VirtualSize = dwSizeOfImage;
+    pSection->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE;
+    return TRUE;
 }
 
 _Success_(return)
@@ -252,9 +281,17 @@ BOOL PE_SectionGetAll(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD 
     PIMAGE_SECTION_HEADER pSectionBase;
     DWORD cSectionsHdr;
     if(!(ntHeader = PE_HeaderGetVerify(H, pProcess, vaModuleBase, pbModuleHeader, &f32))) { return FALSE; }
-    pSectionBase = f32 ?
-        (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS32)) :
-        (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS64));
+    if(f32) {
+        pSectionBase = (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS32));
+        if(((PIMAGE_NT_HEADERS32)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            return PE_SectionSetLowAlign(((PIMAGE_NT_HEADERS32)ntHeader)->OptionalHeader.SizeOfImage, pSections);
+        }
+    } else {
+        pSectionBase = (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS64));
+        if(((PIMAGE_NT_HEADERS64)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            return PE_SectionSetLowAlign(((PIMAGE_NT_HEADERS64)ntHeader)->OptionalHeader.SizeOfImage, pSections);
+        }
+    }
     cSectionsHdr = (DWORD)(((QWORD)pbModuleHeader + 0x1000 - (QWORD)pSectionBase) / sizeof(IMAGE_SECTION_HEADER)); // max section headers possible in 0x1000 module header buffer
     cSectionsHdr = (DWORD)min(cSectionsHdr, ntHeader->FileHeader.NumberOfSections); // FileHeader is the same in both 32/64-bit versions of struct
     if(cSections != cSectionsHdr) { return FALSE; }
@@ -263,7 +300,7 @@ BOOL PE_SectionGetAll(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD 
 }
 
 _Success_(return)
-BOOL PE_SectionGetFromName(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPSTR szSectionName, _Out_ PIMAGE_SECTION_HEADER pSection)
+BOOL PE_SectionGetFromName(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ LPCSTR szSectionName, _Out_ PIMAGE_SECTION_HEADER pSection)
 {
     BOOL f32;
     BYTE pbModuleHeader[0x1000] = { 0 };
@@ -271,9 +308,25 @@ BOOL PE_SectionGetFromName(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ Q
     PIMAGE_SECTION_HEADER pSectionBase;
     DWORD i, cSections;
     if(!(ntHeader = PE_HeaderGetVerify(H, pProcess, vaModuleBase, pbModuleHeader, &f32))) { return FALSE; }
-    pSectionBase = f32 ?
-        (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS32)) :
-        (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS64));
+    if(f32) {
+        pSectionBase = (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS32));
+        if(((PIMAGE_NT_HEADERS32)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            if(memcmp(szSectionName, "LOWALIGN", 8)) {
+                return FALSE;
+            } else {
+                return PE_SectionSetLowAlign(((PIMAGE_NT_HEADERS32)ntHeader)->OptionalHeader.SizeOfImage, pSection);
+            }
+        }
+    } else {
+        pSectionBase = (PIMAGE_SECTION_HEADER)((QWORD)ntHeader + sizeof(IMAGE_NT_HEADERS64));
+        if(((PIMAGE_NT_HEADERS64)ntHeader)->OptionalHeader.SectionAlignment < 0x1000) {
+            if(memcmp(szSectionName, "LOWALIGN", 8)) {
+                return FALSE;
+            } else {
+                return PE_SectionSetLowAlign(((PIMAGE_NT_HEADERS64)ntHeader)->OptionalHeader.SizeOfImage, pSection);
+            }
+        }
+    }
     cSections = (DWORD)(((QWORD)pbModuleHeader + 0x1000 - (QWORD)pSectionBase) / sizeof(IMAGE_SECTION_HEADER)); // max section headers possible in 0x1000 module header buffer
     cSections = (DWORD)min(cSections, ntHeader->FileHeader.NumberOfSections); // FileHeader is the same in both 32/64-bit versions of struct
     // get section by name
@@ -315,7 +368,7 @@ DWORD PE_IatGetNumberOfEx(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_opt
 
 _Success_(return != NULL)
 LPSTR PE_EatForwardedFunctionNameValidate(
-    _In_ LPSTR szForwardedFunction,
+    _In_ LPCSTR szForwardedFunction,
     _Out_writes_opt_(cbModule) LPSTR szModule,
     _In_ DWORD cbModule,
     _Out_opt_ PDWORD pdwOrdinal

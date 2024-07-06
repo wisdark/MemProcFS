@@ -1,10 +1,12 @@
 // util.c : implementation of various utility functions.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "util.h"
 #include "charutil.h"
+#include "ext/miniz.h"
+#include "ext/sha256.h"
 #include <math.h>
 
 /*
@@ -15,7 +17,7 @@ DWORD Util_GetNumDigits(_In_ DWORD dwNumber)
     return (DWORD)max(1, floor(log10(dwNumber) + 1));
 }
 
-QWORD Util_GetNumericA(_In_ LPSTR sz)
+QWORD Util_GetNumericA(_In_ LPCSTR sz)
 {
     if((strlen(sz) > 1) && (sz[0] == '0') && ((sz[1] == 'x') || (sz[1] == 'X'))) {
         return strtoull(sz, NULL, 16); // Hex (starts with 0x)
@@ -84,7 +86,63 @@ BOOL Util_FillHexAscii(_In_reads_opt_(cb) PBYTE pb, _In_ DWORD cb, _In_ DWORD cb
     return TRUE;
 }
 
-VOID Util_AsciiFileNameFix(_In_ LPSTR sz, _In_ CHAR chDefault)
+_Success_(return)
+BOOL Util_FillHexAscii_WithAddress(_In_reads_opt_(cb) PBYTE pb, _In_ DWORD cb, _In_ QWORD qwAddress, _Out_writes_opt_(*pcsz) LPSTR sz, _Inout_ PDWORD pcsz)
+{
+    QWORD va;
+    DWORD i, j, o = 0, cRows;
+    // checks
+    cRows = (cb + 0xf) >> 4;
+    if(!sz) {
+        *pcsz = 1 + cRows * 88;
+        return TRUE;
+    }
+    if(!pb || (*pcsz <= cRows * 88)) { return FALSE; }
+    // fill buffer with bytes
+    for(i = 0; i < cb + ((cb % 16) ? (16 - cb % 16) : 0); i++) {
+        // address
+        if(0 == i % 16) {
+            va = qwAddress + i;
+            for(j = 0; j < 64; j += 4) {
+                sz[o++] = Util_2HexChar(va >> (60 - j));
+            }
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+        } else if(0 == i % 8) {
+            sz[o++] = ' ';
+        }
+        // hex
+        if(i < cb) {
+            sz[o++] = Util_2HexChar(pb[i] >> 4);
+            sz[o++] = Util_2HexChar(pb[i]);
+            sz[o++] = ' ';
+        } else {
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+        }
+        // ascii
+        if(15 == i % 16) {
+            sz[o++] = ' ';
+            sz[o++] = ' ';
+            for(j = i - 15; j <= i; j++) {
+                if(j >= cb) {
+                    sz[o++] = ' ';
+                } else {
+                    sz[o++] = UTIL_PRINTASCII[pb[j]];
+                }
+            }
+            sz[o++] = '\n';
+        }
+    }
+    sz[o] = 0;
+    *pcsz = o;
+    return TRUE;
+}
+
+VOID Util_AsciiFileNameFix(_Inout_ LPSTR sz, _In_ CHAR chDefault)
 {
     DWORD i = 0;
     while(sz[i]) {
@@ -93,7 +151,7 @@ VOID Util_AsciiFileNameFix(_In_ LPSTR sz, _In_ CHAR chDefault)
     }
 }
 
-VOID Util_PathPrependVA(_Out_writes_(MAX_PATH) LPSTR uszDstBuffer, _In_ QWORD va, _In_ BOOL f32, _In_ LPSTR uszText)
+VOID Util_PathPrependVA(_Out_writes_(MAX_PATH) LPSTR uszDstBuffer, _In_ QWORD va, _In_ BOOL f32, _In_ LPCSTR uszText)
 {
     _snprintf_s(uszDstBuffer, MAX_PATH, _TRUNCATE, (f32 ? "%08llx%s%s" : "%016llx%s%s"), va, (uszText[0] ? "-" : ""), uszText);
 }
@@ -102,7 +160,7 @@ _Success_(return >= 0)
 size_t Util_usnprintf_ln_impl(
     _Out_writes_(cszLineLength + 1) LPSTR uszBuffer,
     _In_ QWORD cszLineLength,
-    _In_z_ _Printf_format_string_ LPSTR uszFormat,
+    _In_z_ _Printf_format_string_ LPCSTR uszFormat,
     _In_ va_list arglist
 )
 {
@@ -122,7 +180,7 @@ _Success_(return >= 0)
 size_t Util_usnprintf_ln(
     _Out_writes_(cszLineLength + 1) LPSTR uszBuffer,
     _In_ QWORD cszLineLength,
-    _In_z_ _Printf_format_string_ LPSTR uszFormat,
+    _In_z_ _Printf_format_string_ LPCSTR uszFormat,
     ...
 ) {
     size_t ret;
@@ -273,7 +331,7 @@ NTSTATUS Util_VfsReadFile_FromFILETIME(_In_ QWORD ftValue, _Out_writes_to_(cb, *
     return Util_VfsReadFile_FromPBYTE(szTime, 24, pb, cb, pcbRead, cbOffset);
 }
 
-NTSTATUS Util_VfsReadFile_usnprintf_ln(_Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset, _In_ QWORD cszLineLength, _In_z_ _Printf_format_string_ LPSTR uszFormat, ...)
+NTSTATUS Util_VfsReadFile_usnprintf_ln(_Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset, _In_ QWORD cszLineLength, _In_z_ _Printf_format_string_ LPCSTR uszFormat, ...)
 {
     NTSTATUS nt = UTIL_NTSTATUS_END_OF_FILE;
     DWORD ret;
@@ -418,7 +476,7 @@ VOID Util_VfsTimeStampFile(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _O
     }
 }
 
-LPSTR Util_StrDupA(_In_opt_ LPSTR sz)
+LPSTR Util_StrDupA(_In_opt_ LPCSTR sz)
 {
     SIZE_T cch;
     LPSTR szDup;
@@ -605,7 +663,7 @@ PVOID Util_qfind(_In_ QWORD qwFind, _In_ DWORD cMap, _In_ PVOID pvMap, _In_ DWOR
 }
 
 _Success_(return)
-BOOL Util_VfsHelper_GetIdDir(_In_ LPSTR uszPath, _In_ BOOL fHex, _Out_ PDWORD pdwID, _Out_opt_ LPSTR *puszSubPath)
+BOOL Util_VfsHelper_GetIdDir(_In_ LPCSTR uszPath, _In_ BOOL fHex, _Out_ PDWORD pdwID, _Out_opt_ LPCSTR *puszSubPath)
 {
     CHAR c;
     DWORD i = 0, iSubPath = 0;
@@ -675,7 +733,7 @@ NTSTATUS Util_VfsLineVariable_Read(
     _In_ VMM_HANDLE H,
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID pMap,
     _In_ DWORD cMap,
     _In_ DWORD cbEntry,
@@ -783,7 +841,7 @@ NTSTATUS Util_VfsLineFixed_Read(
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
     _In_ DWORD cbLineLength,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID pMap,
     _In_ DWORD cMap,
     _In_ DWORD cbEntry,
@@ -845,7 +903,7 @@ NTSTATUS Util_VfsLineFixedMapCustom_Read(
     _In_ UTIL_VFSLINEFIXED_PFN_CB pfnCallback,
     _Inout_opt_ PVOID ctx,
     _In_ DWORD cbLineLength,
-    _In_opt_ LPSTR uszHeader,
+    _In_opt_ LPCSTR uszHeader,
     _In_ PVOID ctxMap,
     _In_ DWORD cMap,
     _In_ UTIL_VFSLINEFIXED_MAP_PFN_CB pfnMap,
@@ -895,14 +953,19 @@ VOID Util_GetPathLib(_Out_writes_(MAX_PATH) PCHAR szPath)
     ZeroMemory(szPath, MAX_PATH);
 #ifdef _WIN32
     HMODULE hModuleVmm;
-    hModuleVmm = LoadLibraryA("vmm.dll");
-    GetModuleFileNameA(hModuleVmm, szPath, MAX_PATH - 4);
+    WCHAR wszPath[MAX_PATH] = { 0 };
+    hModuleVmm = LoadLibraryU("vmm.dll");
+    GetModuleFileNameW(hModuleVmm, wszPath, MAX_PATH - 4);
+    CharUtil_WtoU(wszPath, -1, (PBYTE)szPath, MAX_PATH, NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY | CHARUTIL_FLAG_TRUNCATE);
     if(hModuleVmm) { FreeLibrary(hModuleVmm); }
 #endif /* _WIN32 */
 #ifdef LINUX
     Dl_info Info = { 0 };
-    if(!dladdr((void *)Util_GetPathLib, &Info) || !Info.dli_fname) { return; }
-    strncpy(szPath, Info.dli_fname, MAX_PATH - 1);
+    if(!dladdr((void *)Util_GetPathLib, &Info) || !Info.dli_fname) {
+        GetModuleFileNameA(NULL, szPath, MAX_PATH - 4);
+    } else {
+        strncpy(szPath, Info.dli_fname, MAX_PATH - 1);
+    }
 #endif /* LINUX */
     for(i = strlen(szPath) - 1; i > 0; i--) {
         if(szPath[i] == '/' || szPath[i] == '\\') {
@@ -924,29 +987,73 @@ VOID Util_GetPathDll(_Out_writes_(MAX_PATH) PCHAR szPath, _In_opt_ HMODULE hModu
     }
 }
 
+/*
+* Utility function to check whether a buffer is zeroed.
+* -- pb
+* -- cb
+* -- return
+*/
+BOOL Util_IsZeroBuffer(_In_ PBYTE pb, _In_ DWORD cb)
+{
+    static const BYTE pbZERO[0x1000] = { 0 };
+    while(cb >= 0x1000) {
+        if(memcmp(pb, pbZERO, 0x1000)) { return FALSE; }
+        pb += 0x1000;
+        cb -= 0x1000;
+    }
+    if(cb) {
+        if(memcmp(pb, pbZERO, cb)) { return FALSE; }
+    }
+    return TRUE;
+}
+
+/*
+* GZIP decompresses a buffer of known length.
+* NOTE! Function does not guarantee that the buffer is null-terminated.
+* -- cbCompressed = binary gzipped data.
+* -- cbCompressed = length of gzipped data.
+* -- cbDecompressed = length of decompressed data. NB! must exactly match the length of the decompressed data.
+* -- pbDecompressed = buffer to store decompressed data.
+* -- return
+*/
+_Success_(return)
+BOOL Util_DecompressGz(_In_ PBYTE pbCompressed, _In_ DWORD cbCompressed, _In_ DWORD cbDecompressed, _Out_writes_(cbDecompressed) PBYTE pbDecompressed)
+{
+    z_stream stream = { 0 };
+    stream.next_in = pbCompressed;
+    stream.avail_in = cbCompressed;
+    stream.next_out = pbDecompressed;
+    stream.avail_out = cbDecompressed;
+    if(Z_OK != inflateInit(&stream)) { return FALSE; }
+    if(Z_STREAM_END != inflate(&stream, Z_FINISH)) { return FALSE; }
+    return (Z_OK == inflateEnd(&stream)) && (stream.avail_out == 0);
+}
+
+/*
+* GZIP decompresses a buffer of known length and allocated the decompressed
+* data into a null-terminated string.
+* CALLER LocalFree: *pszDecompressed
+* -- pbCompressed = binary gzipped data.
+* -- cbCompressed = length of gzipped data.
+* -- cbDecompressed = length of decompressed data (excl. null terminator).
+* -- pszDecompressed
+* -- return
+*/
+_Success_(return)
+BOOL Util_DecompressGzToStringAlloc(_In_ PBYTE pbCompressed, _In_ DWORD cbCompressed, _In_ DWORD cbDecompressed, _Out_ LPSTR * pszDecompressed)
+{
+    LPSTR szDecompressed = LocalAlloc(0, (SIZE_T)cbDecompressed + 1);
+    if(!szDecompressed) { return FALSE; }
+    if(!Util_DecompressGz(pbCompressed, cbCompressed, cbDecompressed, (PBYTE)szDecompressed)) {
+        LocalFree(szDecompressed);
+        return FALSE;
+    }
+    szDecompressed[cbDecompressed] = 0;
+    *pszDecompressed = szDecompressed;
+    return TRUE;
+}
+
 #ifdef _WIN32
-
-DWORD Util_ResourceSize(_In_ VMM_HANDLE H, _In_ LPWSTR wszResourceName)
-{
-    HRSRC hRes;
-    if(!(hRes = FindResource(H->vmm.hModuleVmmOpt, wszResourceName, RT_RCDATA))) { return 0; }
-    return SizeofResource(H->vmm.hModuleVmmOpt, hRes);
-}
-
-NTSTATUS Util_VfsReadFile_FromResource(_In_ VMM_HANDLE H, _In_ LPWSTR wszResourceName, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset)
-{
-    HRSRC hRes;
-    HGLOBAL hResGlobal;
-    DWORD cbRes;
-    PBYTE pbRes;
-    if(!(hRes = FindResource(H->vmm.hModuleVmmOpt, wszResourceName, RT_RCDATA))) { goto fail; }
-    if(!(hResGlobal = LoadResource(H->vmm.hModuleVmmOpt, hRes))) { goto fail; }
-    if(!(pbRes = (PBYTE)LockResource(hResGlobal))) { goto fail; }
-    cbRes = SizeofResource(H->vmm.hModuleVmmOpt, hRes);
-    return Util_VfsReadFile_FromPBYTE(pbRes, cbRes, pb, cb, pcbRead, cbOffset);
-fail:
-    return VMMDLL_STATUS_FILE_INVALID;
-}
 
 /*
 * SHA256 hash data.
@@ -977,11 +1084,33 @@ fail:
     return fResult;
 }
 
+DWORD Util_ResourceSize(_In_ VMM_HANDLE H, _In_ LPWSTR wszResourceName)
+{
+    HRSRC hRes;
+    if(!(hRes = FindResource(H->vmm.hModuleVmmOpt, wszResourceName, RT_RCDATA))) { return 0; }
+    return SizeofResource(H->vmm.hModuleVmmOpt, hRes);
+}
+
+NTSTATUS Util_VfsReadFile_FromResource(_In_ VMM_HANDLE H, _In_ LPWSTR wszResourceName, _Out_writes_to_(cb, *pcbRead) PBYTE pb, _In_ DWORD cb, _Out_ PDWORD pcbRead, _In_ QWORD cbOffset)
+{
+    HRSRC hRes;
+    HGLOBAL hResGlobal;
+    DWORD cbRes;
+    PBYTE pbRes;
+    if(!(hRes = FindResource(H->vmm.hModuleVmmOpt, wszResourceName, RT_RCDATA))) { goto fail; }
+    if(!(hResGlobal = LoadResource(H->vmm.hModuleVmmOpt, hRes))) { goto fail; }
+    if(!(pbRes = (PBYTE)LockResource(hResGlobal))) { goto fail; }
+    cbRes = SizeofResource(H->vmm.hModuleVmmOpt, hRes);
+    return Util_VfsReadFile_FromPBYTE(pbRes, cbRes, pb, cb, pcbRead, cbOffset);
+fail:
+    return VMMDLL_STATUS_FILE_INVALID;
+}
+
 /*
 * Delete a file denoted by its utf-8 full path.
 * -- uszPathFile
 */
-VOID Util_DeleteFileU(_In_ LPSTR uszPathFile)
+VOID Util_DeleteFileU(_In_ LPCSTR uszPathFile)
 {
     WCHAR wszWinPath[MAX_PATH];
     if(CharUtil_UtoW(uszPathFile, -1, (PBYTE)wszWinPath, sizeof(wszWinPath), NULL, NULL, CHARUTIL_FLAG_STR_BUFONLY)) {
@@ -994,6 +1123,7 @@ VOID Util_DeleteFileU(_In_ LPSTR uszPathFile)
 
 /*
 * SHA256 hash data.
+* (implementation is quite slow)
 * -- pbData
 * -- cbData
 * -- pbHash
@@ -1002,11 +1132,11 @@ VOID Util_DeleteFileU(_In_ LPSTR uszPathFile)
 _Success_(return)
 BOOL Util_HashSHA256(_In_reads_(cbData) PBYTE pbData, _In_ DWORD cbData, _Out_writes_(32) PBYTE pbHash)
 {
-    ZeroMemory(pbHash, 32);
     SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, pbData, cbData);
-    SHA256_Final(pbHash, &sha256);
+    ZeroMemory(pbHash, 32);
+    sha256_init(&sha256);
+    sha256_update(&sha256, pbData, cbData);
+    sha256_final(&sha256, pbHash);
     return TRUE;
 }
 
@@ -1014,7 +1144,7 @@ BOOL Util_HashSHA256(_In_reads_(cbData) PBYTE pbData, _In_ DWORD cbData, _Out_wr
 * Delete a file denoted by its utf-8 full path.
 * -- uszPathFile
 */
-VOID Util_DeleteFileU(_In_ LPSTR uszPathFile)
+VOID Util_DeleteFileU(_In_ LPCSTR uszPathFile)
 {
     remove(uszPathFile);
 }

@@ -1,6 +1,6 @@
 // vmmpyc_vmm.c : implementation of core functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -44,7 +44,7 @@ VmmPycVmm_process(PyObj_Vmm *self, PyObject *args)
     DWORD dwPID;
     LPSTR szProcessName = NULL;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.process(): Not initialized."); }
-    if(PyArg_ParseTuple(args, "k", &dwPID)) {
+    if(PyArg_ParseTuple(args, "I", &dwPID)) {
         // argument: by-pid:
         pyObjProcess = (PyObject*)VmmPycProcess_InitializeInternal(self, dwPID, TRUE);
         if(!pyObjProcess) {
@@ -70,12 +70,12 @@ VmmPycVmm_hex(PyObj_Vmm *self, PyObject *args)
 {
     PyObject *pyString;
     DWORD cbInitialOffset = 0, csz = 0;
-    QWORD cb;
+    SIZE_T cb;
     PBYTE pb;
     LPSTR sz = NULL;
     BOOL result;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.hex(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "y#|k", &pb, &cb, &cbInitialOffset)) {
+    if(!PyArg_ParseTuple(args, "y#|I", &pb, &cb, &cbInitialOffset)) {
         return PyErr_Format(PyExc_RuntimeError, "Vmm.hex(): Illegal argument.");
     }
     if(cb == 0) {
@@ -143,7 +143,6 @@ VmmPycVmm_reg_hive_list(PyObj_Vmm *self, PyObject *args)
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.reg_hive_list(): Not initialized."); }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
     Py_BEGIN_ALLOW_THREADS;
-    VMMDLL_WinReg_HiveList(self->hVMM, NULL, 0, &cHives);
     result =
         VMMDLL_WinReg_HiveList(self->hVMM, NULL, 0, &cHives) &&
         cHives &&
@@ -200,12 +199,32 @@ VmmPycVmm_reg_value(PyObj_Vmm *self, PyObject *args)
     return pyObj;
 }
 
-// -> *PyObj_Maps
+// (|QWORD, QWORD, QWORD) -> PyObj_Search*
 static PyObject*
-VmmPycVmm_maps(PyObj_Vmm *self, void *closure)
+VmmPycVmm_search(PyObj_Vmm *self, PyObject *args)
 {
-    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.maps: Not initialized."); }
-    return (PyObject*)VmmPycMaps_InitializeInternal(self);
+    PyObject *pyObj;
+    LPSTR uszName = NULL;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.search(): Not initialized."); }
+    pyObj = (PyObject*)VmmPycSearch_InitializeInternal(self, -1, args);
+    if(!pyObj) {
+        return PyErr_Format(PyExc_RuntimeError, "Vmm.search(): Illegal argument.");
+    }
+    return pyObj;
+}
+
+// (PyList(STR), |QWORD, QWORD, DWORD, QWORD) ->PyObj_Yara*
+static PyObject*
+VmmPycVmm_search_yara(PyObj_Vmm *self, PyObject *args)
+{
+    PyObject *pyObj;
+    LPSTR uszName = NULL;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "Vmm.search_yara(): Not initialized."); }
+    pyObj = (PyObject*)VmmPycYara_InitializeInternal(self, -1, args);
+    if(!pyObj) {
+        return PyErr_Format(PyExc_RuntimeError, "Vmm.search_yara(): Illegal argument.");
+    }
+    return pyObj;
 }
 
 //-----------------------------------------------------------------------------
@@ -220,8 +239,9 @@ VmmPycVmm_InitializeInternal2(_In_ PyObj_Vmm *pyVMM, _In_ VMM_HANDLE hVMM)
     pyObj->hVMM = hVMM;
     pyObj->fVmmCoreOpenType = TRUE;
     pyObj->pyObjKernel = (PyObject*)VmmPycKernel_InitializeInternal(pyObj);
+    pyObj->pyObjMaps = (PyObject*)VmmPycMaps_InitializeInternal(pyObj);
     pyObj->pyObjMemory = (PyObject*)VmmPycPhysicalMemory_InitializeInternal(pyObj);
-    pyObj->pyObjVfs = (PyObject *)VmmPycVfs_InitializeInternal(pyObj);
+    pyObj->pyObjVfs = (PyObject*)VmmPycVfs_InitializeInternal(pyObj);
     pyObj->fValid = TRUE;
     return pyObj;
 }
@@ -239,7 +259,7 @@ VmmPycVmm_init(PyObj_Vmm *self, PyObject *args, PyObject *kwds)
     static char *kwlist[] = { "args", NULL };
     PyObject *pyListSrc = NULL, *pyString, **pyBytesDstArgs, *pyObjProcessTest;
     DWORD i, cDstArgs;
-    LPSTR *pszDstArgs;
+    LPCSTR *pszDstArgs;
     self->fVmmCoreOpenType = FALSE;
     if(!PyArg_ParseTupleAndKeywords(args, kwds, "|O!", kwlist, &PyList_Type, &pyListSrc)) {
         PyErr_SetString(PyExc_TypeError, "Vmm.init(): Illegal argument.");
@@ -252,8 +272,8 @@ VmmPycVmm_init(PyObj_Vmm *self, PyObject *args, PyObject *kwds)
             return -1;
         }
         // allocate & initialize buffer+basic
-        pszDstArgs = (LPSTR *)LocalAlloc(LMEM_ZEROINIT, sizeof(LPSTR) * cDstArgs);
-        pyBytesDstArgs = (PyObject **)LocalAlloc(LMEM_ZEROINIT, sizeof(PyObject *) * cDstArgs);
+        pszDstArgs = (LPCSTR*)LocalAlloc(LMEM_ZEROINIT, sizeof(LPSTR) * cDstArgs);
+        pyBytesDstArgs = (PyObject**)LocalAlloc(LMEM_ZEROINIT, sizeof(PyObject*)*cDstArgs);
         if(!pszDstArgs || !pyBytesDstArgs) {
             PyErr_SetString(PyExc_TypeError, "Vmm.init(): Out of memory.");
             return -1;
@@ -299,13 +319,11 @@ VmmPycVmm_init(PyObj_Vmm *self, PyObject *args, PyObject *kwds)
         }
         g_PluginVMM_LoadedOnce = TRUE;
     }
-    // initialize vfs:
-    if(!self->pyObjVfs) {
-        self->pyObjVfs = (PyObject*)VmmPycVfs_InitializeInternal(self);
-    }
     // success - initialize type object and return!
     self->pyObjKernel = (PyObject*)VmmPycKernel_InitializeInternal(self);
+    self->pyObjMaps = (PyObject*)VmmPycMaps_InitializeInternal(self);
     self->pyObjMemory = (PyObject*)VmmPycPhysicalMemory_InitializeInternal(self);
+    self->pyObjVfs = (PyObject*)VmmPycVfs_InitializeInternal(self);
     self->fValid = TRUE;
     return 0;
 }
@@ -321,9 +339,10 @@ VmmPycVmm_dealloc(PyObj_Vmm *self)
             Py_END_ALLOW_THREADS;
         }
     }
-    Py_XDECREF(self->pyObjVfs); self->pyObjVfs = NULL;
-    Py_XDECREF(self->pyObjKernel); self->pyObjKernel = NULL;
-    Py_XDECREF(self->pyObjMemory); self->pyObjMemory = NULL;
+    Py_XDECREF(self->pyObjKernel);
+    Py_XDECREF(self->pyObjMaps);
+    Py_XDECREF(self->pyObjMemory);
+    Py_XDECREF(self->pyObjVfs);
 }
 
 // () -> None
@@ -347,17 +366,19 @@ BOOL VmmPycVmm_InitializeType(PyObject *pModule)
         {"reg_hive_list", (PyCFunction)VmmPycVmm_reg_hive_list, METH_VARARGS, "List registry hives."},
         {"reg_key", (PyCFunction)VmmPycVmm_reg_key, METH_VARARGS, "Retrieve registry key from full path."},
         {"reg_value", (PyCFunction)VmmPycVmm_reg_value, METH_VARARGS, "Retrieve registry value from full path."},
+        {"search", (PyCFunction)VmmPycVmm_search, METH_VARARGS, "Perform a binary search."},
+        {"search_yara", (PyCFunction)VmmPycVmm_search_yara, METH_VARARGS, "Perform a YARA search."},
         {"hex", (PyCFunction)VmmPycVmm_hex, METH_VARARGS, "Convert a bytes object into a human readable 'memory dump' style type of string."},
         {NULL, NULL, 0, NULL}
     };
     static PyMemberDef PyMembers[] = {
-        {"memory", T_OBJECT, offsetof(PyObj_Vmm, pyObjMemory), READONLY, "Physical memory."},
         {"kernel", T_OBJECT, offsetof(PyObj_Vmm, pyObjKernel), READONLY, "Kernel information."},
+        {"maps", T_OBJECT, offsetof(PyObj_Vmm, pyObjMaps), READONLY, "Info maps."},
+        {"memory", T_OBJECT, offsetof(PyObj_Vmm, pyObjMemory), READONLY, "Physical memory."},
         {"vfs", T_OBJECT, offsetof(PyObj_Vmm, pyObjVfs), READONLY, "Virtual file system."},
         {NULL}
     };
     static PyGetSetDef PyGetSet[] = {
-        {"maps", (getter)VmmPycVmm_maps, (setter)NULL, "Info maps.", NULL},
         {NULL}
     };
     static PyType_Slot PyTypeSlot[] = {

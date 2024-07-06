@@ -1,6 +1,6 @@
 // vmm.h : definitions related to virtual memory management support.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __VMM_H__
@@ -10,6 +10,7 @@
 #include "vmmlog.h"
 #include "ob/ob.h"
 #include "ob/ob_tag.h"
+#include "vmmwindef.h"
 
 #ifndef STRINGIZE2
 #define STRINGIZE2(s) #s
@@ -34,8 +35,6 @@
 #define VMM_STATUS_FILE_INVALID                 STATUS_FILE_INVALID
 #define VMM_STATUS_FILE_SYSTEM_LIMITATION       STATUS_FILE_SYSTEM_LIMITATION
 
-#define VMM_PROCESSTABLE_ENTRIES_MAX            0x4000
-#define VMM_PROCESS_OS_ALLOC_PTR_MAX            0x4    // max number of operating system specific pointers that must be free'd
 #define VMM_MEMMAP_ENTRIES_MAX                  0x4000
 
 #define VMM_MEMMAP_PAGE_A                       0x0000000000000001
@@ -70,7 +69,7 @@
 #define VMM_PTR_OFFSET(f32, pb, o)              ((f32) ? *(PDWORD)((o) + (PBYTE)(pb)) : *(PQWORD)((o) + (PBYTE)(pb)))
 #define VMM_PTR_OFFSET_DUAL(f32, pb, o32, o64)  ((f32) ? *(PDWORD)((o32) + (PBYTE)(pb)) : *(PQWORD)((o64) + (PBYTE)(pb)))
 #define VMM_PTR_OFFSET_EX_FAST_REF(f32, pb, o)  ((f32) ? (~0x7 & *(PDWORD)((o) + (PBYTE)(pb))) : (~0xfULL & *(PQWORD)((o) + (PBYTE)(pb))))
-#define VMM_PTR_EX_FAST_REF(f32, v)             (((f32) ? ~0x7 : ~0xfULL) & v)
+#define VMM_PTR_EX_FAST_REF(f32, v)             (((f32) ? ~0x7ULL : ~0xfULL) & (v))
 
 #define VMM_KADDR32(va)                         (((va) & 0x80000000) == 0x80000000)
 #define VMM_KADDR32_4(va)                       (((va) & 0x80000003) == 0x80000000)
@@ -114,39 +113,41 @@
 #define CONTAINING_RECORD64(address, type, field)   ((QWORD)(address) - (QWORD)(&((type*)0)->field))
 #define CONTAINING_RECORD32(address, type, field)   ((DWORD)((DWORD)(QWORD)(address) - (DWORD)(QWORD)(&((type *)0)->field)))
 
-static const LPSTR VMM_MEMORYMODEL_TOSTRING[4] = { "N/A", "X86", "X86PAE", "X64" };
+static const LPSTR VMM_MEMORYMODEL_TOSTRING[5] = { "N/A", "X86", "X86PAE", "X64", "ARM64" };
 
 typedef enum tdVMM_MEMORYMODEL_TP {
     VMM_MEMORYMODEL_NA      = 0,
     VMM_MEMORYMODEL_X86     = 1,
     VMM_MEMORYMODEL_X86PAE  = 2,
-    VMM_MEMORYMODEL_X64     = 3
+    VMM_MEMORYMODEL_X64     = 3,
+    VMM_MEMORYMODEL_ARM64   = 4
 } VMM_MEMORYMODEL_TP;
 
 typedef enum tdVMM_SYSTEM_TP {
     VMM_SYSTEM_UNKNOWN_PHYSICAL = 0,
-    VMM_SYSTEM_UNKNOWN_X64      = 1,
-    VMM_SYSTEM_WINDOWS_X64      = 2,
-    VMM_SYSTEM_UNKNOWN_X86      = 3,
-    VMM_SYSTEM_WINDOWS_X86      = 4
+    VMM_SYSTEM_UNKNOWN_64       = 1,
+    VMM_SYSTEM_WINDOWS_64       = 2,
+    VMM_SYSTEM_UNKNOWN_32       = 3,
+    VMM_SYSTEM_WINDOWS_32       = 4
 } VMM_SYSTEM_TP;
 
 static LPCSTR VMM_SYSTEM_TP_STRING[] = {
     [VMM_SYSTEM_UNKNOWN_PHYSICAL] = "Physical",
-    [VMM_SYSTEM_UNKNOWN_X64] = "UnknownX64",
-    [VMM_SYSTEM_WINDOWS_X64] = "WindowsX64",
-    [VMM_SYSTEM_UNKNOWN_X86] = "UnknownX86",
-    [VMM_SYSTEM_WINDOWS_X86] = "WindowsX86",
+    [VMM_SYSTEM_UNKNOWN_64]       = "Unknown 64-bit",
+    [VMM_SYSTEM_WINDOWS_64]       = "Windows 64-bit",
+    [VMM_SYSTEM_UNKNOWN_32]       = "Unknown 32-bit",
+    [VMM_SYSTEM_WINDOWS_32]       = "Windows 32-bit",
 };
 
 typedef enum tdVMM_PTE_TP {
-    VMM_PTE_TP_NA = 0,
-    VMM_PTE_TP_HARDWARE = 1,
-    VMM_PTE_TP_TRANSITION = 2,
-    VMM_PTE_TP_PROTOTYPE = 3,
-    VMM_PTE_TP_DEMANDZERO = 4,
-    VMM_PTE_TP_COMPRESSED = 5,
-    VMM_PTE_TP_PAGEFILE = 6,
+    VMM_PTE_TP_NA           = 0,
+    VMM_PTE_TP_HARDWARE     = 1,
+    VMM_PTE_TP_TRANSITION   = 2,
+    VMM_PTE_TP_PROTOTYPE    = 3,
+    VMM_PTE_TP_DEMANDZERO   = 4,
+    VMM_PTE_TP_COMPRESSED   = 5,
+    VMM_PTE_TP_PAGEFILE     = 6,
+    VMM_PTE_TP_FILE         = 7,
 } VMM_PTE_TP, *PVMM_PTE_TP;
 
 // OBJECT TYPE table exists on Win7+ It's initialized on first use and it will
@@ -273,9 +274,16 @@ typedef struct tdVMM_MAP_VADENTRY {
     QWORD _Reserved2;
 } VMM_MAP_VADENTRY, *PVMM_MAP_VADENTRY;
 
+#define VADEXENTRY_FLAG_HARDWARE      0x01
+#define VADEXENTRY_FLAG_W             0x10
+#define VADEXENTRY_FLAG_K             0x40
+#define VADEXENTRY_FLAG_NX            0x80
+
 typedef struct tdVMM_MAP_VADEXENTRY {
     VMM_PTE_TP tp;
-    DWORD iPML;
+    BYTE iPML;
+    BYTE flags;
+    WORD _Reserved2;
     QWORD va;
     QWORD pa;
     QWORD pte;
@@ -492,7 +500,9 @@ typedef struct tdVMM_MAP_THREADENTRY {
     UCHAR bSuspendCount;
     UCHAR bWaitReason;
     UCHAR _FutureUse1[2];
-    DWORD _FutureUse2[15];
+    DWORD _FutureUse2[11];
+    QWORD vaImpersonationToken;
+    QWORD vaWin32StartAddress;
 } VMM_MAP_THREADENTRY, *PVMM_MAP_THREADENTRY;
 
 typedef enum tdVMM_MAP_HANDLEENTRY_TP_INFOEX {
@@ -549,6 +559,7 @@ typedef struct tdVMM_MAP_OBJECTENTRY {
     struct {
         LPSTR usz;
         QWORD ft;
+        QWORD va;       // type dependent virtual address: (SECTION: vaControlArea)
     } ExtInfo;
     PVOID _Reserved;
 } VMM_MAP_OBJECTENTRY, *PVMM_MAP_OBJECTENTRY;
@@ -731,59 +742,12 @@ typedef struct tdVMM_MAP_SERVICEENTRY {
     QWORD _Reserved;
 } VMM_MAP_SERVICEENTRY, *PVMM_MAP_SERVICEENTRY;
 
-typedef enum tdVMM_EVIL_TP {        // EVIL types - sorted by "evilness"
-    VMM_EVIL_TP_PE_NA,              // _NA
-    VMM_EVIL_TP_PE_INJECTED,        // MODULE
-    VMM_EVIL_TP_PROC_NOLINK,        // _NA
-    VMM_EVIL_TP_PROC_PARENT,        // _NA
-    VMM_EVIL_TP_PROC_BAD_DTB,       // _NA
-    VMM_EVIL_TP_PROC_USER,          // _NA
-    VMM_EVIL_TP_PEB_MASQUERADE,     // _NA
-    VMM_EVIL_TP_DRIVER_PATH,        // TEXT
-    VMM_EVIL_TP_PEB_BAD_LDR,        // _NA
-    VMM_EVIL_TP_PE_NOTLINKED,       // MODULE
-    VMM_EVIL_TP_VAD_PATCHED_PE,     // VADEX
-    VMM_EVIL_TP_VAD_PRIVATE_RWX,    // VADEX
-    VMM_EVIL_TP_VAD_NOIMAGE_RWX,    // VADEX
-    VMM_EVIL_TP_VAD_PRIVATE_RX,     // VADEX
-    VMM_EVIL_TP_VAD_NOIMAGE_RX,     // VADEX
-    VMM_EVIL_TP_MAX
-} VMM_EVIL_TP;
+typedef DWORD                       VMM_MODULE_ID;
 
-static LPCSTR VMM_EVIL_TP_STRING[VMM_EVIL_TP_MAX] = {
-    [VMM_EVIL_TP_PE_NA]             = "UNKNOWN",
-    [VMM_EVIL_TP_PE_INJECTED]       = "PE_INJECT",
-    [VMM_EVIL_TP_PROC_NOLINK]       = "PROC_NOLINK",
-    [VMM_EVIL_TP_PROC_PARENT]       = "PROC_PARENT",
-    [VMM_EVIL_TP_PROC_BAD_DTB]      = "PROC_BAD_DTB",
-    [VMM_EVIL_TP_PROC_USER]         = "PROC_USER",
-    [VMM_EVIL_TP_PEB_MASQUERADE]    = "PEB_MASQ",
-    [VMM_EVIL_TP_DRIVER_PATH]       = "DRIVER_PATH",
-    [VMM_EVIL_TP_PEB_BAD_LDR]       = "PEB_BAD_LDR",
-    [VMM_EVIL_TP_PE_NOTLINKED]      = "PE_NOLINK",
-    [VMM_EVIL_TP_VAD_PATCHED_PE]    = "PE_PATCHED",
-    [VMM_EVIL_TP_VAD_PRIVATE_RWX]   = "PRIVATE_RWX",
-    [VMM_EVIL_TP_VAD_NOIMAGE_RWX]   = "NOIMAGE_RWX",
-    [VMM_EVIL_TP_VAD_PRIVATE_RX]    = "PRIVATE_RX",
-    [VMM_EVIL_TP_VAD_NOIMAGE_RX]    = "NOIMAGE_RX",
-};
-
-typedef struct tdVMM_MAP_EVILENTRY {
-    VMM_EVIL_TP tp;
-    DWORD dwPID;
-    DWORD fEvilAllSuppress;
-    DWORD oVadEx;   // from VAD base
-    QWORD vaVad;
-    QWORD va;
-    struct {
-        QWORD pa;
-        QWORD paProto;
-        WORD wPatchOffset;
-        WORD wPatchByteCount;
-    } VAD_PATCHED_PE;
-    DWORD cbuText;
-    LPSTR uszText;
-} VMM_MAP_EVILENTRY, *PVMM_MAP_EVILENTRY;
+typedef struct tdVMMEVIL_TYPE {
+    LPSTR Name;                     // max 15 chars
+    DWORD Severity;
+} VMMEVIL_TYPE;
 
 typedef struct tdVMMOB_MAP_PTE {
     OB ObHdr;
@@ -968,33 +932,24 @@ typedef struct tdVMMOB_MAP_SERVICE {
     VMM_MAP_SERVICEENTRY pMap[];    // map entries.
 } VMMOB_MAP_SERVICE, *PVMMOB_MAP_SERVICE;
 
-typedef struct tdVMMOB_MAP_EVIL {
-    OB ObHdr;
-    QWORD tcCreateTime;             // create timestamp [internally used only]
-    PBYTE pbMultiText;              // multi-str pointed into by VMM_MAP_EVILENTRY.usz*
-    DWORD cbMultiText;
-    DWORD cMap;                     // # map entries.
-    VMM_MAP_EVILENTRY pMap[];       // map entries.
-} VMMOB_MAP_EVIL, *PVMMOB_MAP_EVIL;
-
 
 
 // ----------------------------------------------------------------------------
 // VMM process object/struct related definitions below:
 // ----------------------------------------------------------------------------
 
-typedef enum tdVMM_PROCESS_INTEGRITY_LEVEL {
-    VMM_PROCESS_INTEGRITY_LEVEL_UNKNOWN     = 0,
-    VMM_PROCESS_INTEGRITY_LEVEL_UNTRUSTED   = 1,
-    VMM_PROCESS_INTEGRITY_LEVEL_LOW         = 2,
-    VMM_PROCESS_INTEGRITY_LEVEL_MEDIUM      = 3,
-    VMM_PROCESS_INTEGRITY_LEVEL_MEDIUMPLUS  = 4,
-    VMM_PROCESS_INTEGRITY_LEVEL_HIGH        = 5,
-    VMM_PROCESS_INTEGRITY_LEVEL_SYSTEM      = 6,
-    VMM_PROCESS_INTEGRITY_LEVEL_PROTECTED   = 7,
-} VMM_PROCESS_INTEGRITY_LEVEL;
+typedef enum tdVMM_TOKEN_INTEGRITY_LEVEL {
+    VMM_TOKEN_INTEGRITY_LEVEL_UNKNOWN     = 0,
+    VMM_TOKEN_INTEGRITY_LEVEL_UNTRUSTED   = 1,
+    VMM_TOKEN_INTEGRITY_LEVEL_LOW         = 2,
+    VMM_TOKEN_INTEGRITY_LEVEL_MEDIUM      = 3,
+    VMM_TOKEN_INTEGRITY_LEVEL_MEDIUMPLUS  = 4,
+    VMM_TOKEN_INTEGRITY_LEVEL_HIGH        = 5,
+    VMM_TOKEN_INTEGRITY_LEVEL_SYSTEM      = 6,
+    VMM_TOKEN_INTEGRITY_LEVEL_PROTECTED   = 7,
+} VMM_TOKEN_INTEGRITY_LEVEL;
 
-static LPCSTR VMM_PROCESS_INTEGRITY_LEVEL_STR[] = {
+static LPCSTR VMM_TOKEN_INTEGRITY_LEVEL_STR[] = {
     "---",
     "Untrusted",
     "Low",
@@ -1005,16 +960,37 @@ static LPCSTR VMM_PROCESS_INTEGRITY_LEVEL_STR[] = {
     "Protected"
 };
 
+typedef struct tdVMMOB_TOKEN {
+    OB ObHdr;
+    QWORD vaToken;
+    DWORD dwHashSID;
+    DWORD dwSessionId;
+    DWORD dwUserAndGroupCount;
+    QWORD vaUserAndGroups;
+    QWORD qwLUID;
+    LPSTR szSID;
+    BOOL fSidUserValid;
+    BOOL fSidUserSYSTEM;
+    union {
+        SID SID;
+        BYTE pb[SECURITY_MAX_SID_SIZE];
+    } SidUser;
+    VMM_TOKEN_INTEGRITY_LEVEL IntegrityLevel;
+    SEP_TOKEN_PRIVILEGES Privileges;
+} VMMOB_TOKEN, *PVMMOB_TOKEN;
+
 typedef struct tdVMMWIN_USER_PROCESS_PARAMETERS {
     BOOL fProcessed;
     DWORD cbuImagePathName;
     DWORD cbuCommandLine;
     DWORD cbuWindowTitle;
     DWORD cbuEnvironment;
+    DWORD cbuCurrentDirectory;
     LPSTR uszImagePathName;
     LPSTR uszCommandLine;
     LPSTR uszWindowTitle;
     LPSTR uszEnvironment;
+    LPSTR uszCurrentDirectory;
 } VMMWIN_USER_PROCESS_PARAMETERS, *PVMMWIN_USER_PROCESS_PARAMETERS;
 
 #define VMM_PHYS2VIRT_INFORMATION_MAX_PROCESS_RESULT    4
@@ -1080,11 +1056,6 @@ typedef struct tdVMM_PROCESS {
         PVMMOB_MAP_HEAP pObHeap;
         PVMMOB_MAP_THREAD pObThread;
         PVMMOB_MAP_HANDLE pObHandle;
-        PVMMOB_MAP_EVIL pObEvil;
-        // separate locks from main process lock to avoid deadlocks
-        // but also for increased parallelization for slow tasks.
-        CRITICAL_SECTION LockUpdateThreadExtendedInfo;
-        CRITICAL_SECTION LockUpdateMapEvil;
     } Map;
     PVMMOB_PROCESS_PERSISTENT pObPersistent;     // Always exists
     struct {
@@ -1097,41 +1068,27 @@ typedef struct tdVMM_PROCESS {
             DWORD cb;
             BYTE pb[0xa00];
         } EPROCESS;
-        struct {
-            BOOL fInitialized;
-            DWORD dwHashSID;
-            DWORD dwSessionId;
-            DWORD dwUserAndGroupCount;
-            QWORD vaUserAndGroups;
-            QWORD va;
-            QWORD qwLUID;
-            LPSTR szSID;
-            BOOL fSidUserValid;
-            union {
-                SID SID;
-                BYTE pb[SECURITY_MAX_SID_SIZE];
-            } SidUser;
-            VMM_PROCESS_INTEGRITY_LEVEL IntegrityLevel;
-        } TOKEN;
+        PVMMOB_TOKEN Token;
     } win;
     struct {
         POB_CONTAINER pObCLdrModulesDisplayCache;
         POB_CONTAINER pObCPeDumpDirCache;
         POB_CONTAINER pObCPhys2Virt;
     } Plugin;
-    struct tdVMM_PROCESS *pObProcessCloneParent;    // only set in cloned processes
+    struct {
+        struct tdVMM_PROCESS *pObProcessCloneParent;    // only set in cloned processes
+    } VmmInternal;
 } VMM_PROCESS, *PVMM_PROCESS;
 
-#define PVMM_PROCESS_SYSTEM         ((PVMM_PROCESS)-4)      // SYSTEM PROCESS (PID 4) - ONLY VALID WITH VmmRead*/VmmWrite*/VmmCachePrefetch* functions!
+#define PVMM_PROCESS_SYSTEM         ((PVMM_PROCESS)-4)  // SYSTEM PROCESS (PID 4) - ONLY VALID WITH VmmRead*/VmmWrite*/VmmCachePrefetch* functions!
 
 typedef struct tdVMMOB_PROCESS_TABLE {
     OB ObHdr;
-    SIZE_T c;                       // Total # of processes in table
-    SIZE_T cActive;                 // # of active processes (state = 0) in table
-    WORD _iFLink;
-    WORD _iFLinkM[VMM_PROCESSTABLE_ENTRIES_MAX];
-    PVMM_PROCESS _M[VMM_PROCESSTABLE_ENTRIES_MAX];
-    POB_CONTAINER pObCNewPROC;      // contains VMM_PROCESS_TABLE
+    SIZE_T c;                                           // Total # of processes in table
+    SIZE_T cActive;                                     // # of active processes (state = 0) in table
+    BOOL fTokenInit;                                    // Process token initialization done for processes in table
+    POB_MAP pObProcessMap;                              // Map of processes
+    POB_CONTAINER pObCNewPROC;                          // Contains VMM_PROCESS_TABLE
 } VMMOB_PROCESS_TABLE, *PVMMOB_PROCESS_TABLE;
 
 #define VMM_CACHE_REGIONS               3
@@ -1234,6 +1191,8 @@ typedef struct tdVMM_MEMORYMODEL_FUNCTIONS {
 
 typedef struct tdVMMCONFIG {
     QWORD paCR3;
+    QWORD qwVmmID;                      // vmmid parameter (used with -create-from-vmmid to create a dulicate VMM instance).
+    VMM_MEMORYMODEL_TP tpMemoryModel;   // user-set memory model
     DWORD tpForensicMode;               // command line forensic mode
     QWORD qwParentVmmHandle;            // internal use only (option: _vmm_parent)
     // flags below
@@ -1246,13 +1205,22 @@ typedef struct tdVMMCONFIG {
     BOOL fDisableSymbols;
     BOOL fDisableInfoDB;
     BOOL fDisablePython;
+    BOOL fDisableYara;
+    BOOL fDisableYaraBuiltin;
+    BOOL fDisplayVersion;
+    BOOL fLicenseAcceptElasticV2;
+    BOOL fRemoteFS;
     BOOL fWaitInitialize;
     BOOL fUserInteract;
     BOOL fFileInfoHeader;
     BOOL fPhysicalOnlyMemory;           // physical memory only - no windows analysis!
     BOOL fVM;                           // parse virtual machines (resource intensive)
     BOOL fVMNested;                     // parse virtual machines (very resource intensive)
-    BOOL fVMPhysicalOnly;               // parse virtual machines as physical memory only (less resource intense).
+    BOOL fVMPhysicalOnly;               // parse virtual machines as physical memory only (less resource intense)
+    BOOL fMemMapAuto;
+    // values below:
+    DWORD dwPteQualityThreshold;        // max number of allowed invalid PTE entries in a page table (default: 0x20)
+    QWORD tcTimeStart;                  // start time GetTickCount64()
     // strings below
     CHAR szPythonPath[MAX_PATH];
     CHAR szPythonExecuteFile[MAX_PATH];
@@ -1261,6 +1229,13 @@ typedef struct tdVMMCONFIG {
     CHAR szMemMapStr[2048];
     CHAR szLogFile[MAX_PATH];
     CHAR szLogLevel[MAX_PATH];
+    CHAR szPathLibraryVmm[MAX_PATH];
+    CHAR szForensicYaraRules[MAX_PATH];
+    // allocated strings below:
+    struct {
+        DWORD cusz;
+        LPSTR* pusz;
+    } ForensicProcessSkipList;
 } VMMCONFIG, *PVMMCONFIG;
 
 typedef struct tdVMMCONFIG_PDB {
@@ -1329,6 +1304,7 @@ typedef struct tdVMM_OFFSET_EPROCESS {
         WORD Token;
         WORD TOKEN_cb;
         WORD TOKEN_TokenId;
+        WORD TOKEN_Privileges;
         WORD TOKEN_SessionId;
         WORD TOKEN_UserAndGroups;
         WORD TOKEN_UserAndGroupCount;
@@ -1360,6 +1336,8 @@ typedef struct tdVMM_OFFSET_ETHREAD {
     WORD oExitTime;
     WORD oExitStatus;
     WORD oStartAddress;
+    WORD oClientSecurityOpt;
+    WORD oWin32StartAddress;
     WORD oThreadListEntry;
     WORD oCid;
     WORD oMax;
@@ -1488,7 +1466,6 @@ typedef struct tdVMM_OFFSET {
     struct { WORD cb; } _POOL_HEADER;
 } VMM_OFFSET, *PVMM_OFFSET;
 
-typedef struct tdVMMWINOBJ_CONTEXT          *PVMMWINOBJ_CONTEXT;
 typedef struct tdVMMWIN_REGISTRY_CONTEXT    *PVMMWIN_REGISTRY_CONTEXT;
 typedef struct tdVMMOB_VMGLOBAL_CONTEXT     *PVMMOB_VMGLOBAL_CONTEXT;
 
@@ -1533,10 +1510,21 @@ typedef NTSTATUS WINAPI VMMFN_RtlDecompressBuffer(
     PULONG FinalUncompressedSize
 );
 
+typedef NTSTATUS WINAPI VMMFN_RtlDecompressBufferEx(
+    USHORT CompressionFormat,
+    PUCHAR UncompressedBuffer,
+    ULONG  UncompressedBufferSize,
+    PUCHAR CompressedBuffer,
+    ULONG  CompressedBufferSize,
+    PULONG FinalUncompressedSize,
+    PVOID  WorkSpace
+);
+
 typedef struct tdVMM_DYNAMIC_LOAD_FUNCTIONS {
     // functions below may be loaded on startup
     // NB! null checks are required before use!
     VMMFN_RtlDecompressBuffer *RtlDecompressBufferOpt;     // ntdll.dll!RtlDecompressBuffer
+    VMMFN_RtlDecompressBufferEx *RtlDecompressBufferExOpt; // ntdll.dll!RtlDecompressBufferEx
 } VMM_DYNAMIC_LOAD_FUNCTIONS;
 
 // forward declarations of non-public types:
@@ -1591,7 +1579,6 @@ typedef struct tdVMM_CONTEXT {
         DWORD vaNtdll32;
         QWORD vaNtdll64;
     } ContextUnloadedModule;
-    PVMMWINOBJ_CONTEXT pObjects;
     PVMMWIN_REGISTRY_CONTEXT pRegistry;
     QWORD paPluginPhys2VirtRoot;
     VMM_DYNAMIC_LOAD_FUNCTIONS fn;
@@ -1601,15 +1588,15 @@ typedef struct tdVMM_CONTEXT {
         PVOID FLinkForensic;
         PVOID Root;
         PVOID Proc;
-        DWORD dwNextMID;
         DWORD cIngestPhysmem;
         DWORD cIngestVirtmem;
+        VMM_MODULE_ID NextMID;
     } PluginManager;
     CRITICAL_SECTION LockUpdateMap;     // lock for global maps - such as MapUser
     CRITICAL_SECTION LockUpdateModule;  // lock for internal modules
     CRITICAL_SECTION LockUpdateVM;      // lock for vm map (vm parse is heavy - separate lock!)
     struct {                            // lightweight SRW locks
-        SRWLOCK VmmPaging;
+        SRWLOCK ModuleMiscWeb;
         SRWLOCK WinObjDisplay;
         SRWLOCK PluginMgr;
     } LockSRW;
@@ -1618,13 +1605,14 @@ typedef struct tdVMM_CONTEXT {
     POB_CONTAINER pObCMapUser;
     POB_CONTAINER pObCMapVM;
     POB_CONTAINER pObCMapNet;
-    POB_CONTAINER pObCMapObject;
+    POB_CONTAINER pObCMapObjMgr;
     POB_CONTAINER pObCMapKDevice;
     POB_CONTAINER pObCMapKDriver;
     POB_CONTAINER pObCMapPoolAll;
     POB_CONTAINER pObCMapPoolBig;
     POB_CONTAINER pObCMapService;
     POB_CONTAINER pObCInfoDB;
+    POB_CONTAINER pObCWinObj;
     POB_CONTAINER pObCCachePrefetchEPROCESS;
     POB_CONTAINER pObCCachePrefetchRegistry;
     POB_CACHEMAP pObCacheMapEAT;
@@ -2065,8 +2053,6 @@ VOID VmmVirt2PhysGetInformation(_In_ VMM_HANDLE H, _Inout_ PVMM_PROCESS pProcess
 */
 PVMMOB_PHYS2VIRT_INFORMATION VmmPhys2VirtGetInformation(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD paTarget);
 
-#define VMM_MEMORY_SEARCH_MAX               16
-
 typedef struct tdVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY {
     DWORD cbAlign;              // byte-align at 2^x - 0, 1, 2, 4, 8, 16, .. bytes.
     DWORD cb;                   // number of bytes to search (1-32).
@@ -2082,7 +2068,7 @@ typedef struct tdVMM_MEMORY_SEARCH_CONTEXT {
     BOOL fAbortRequested;       // may be set by caller to abort processing prematurely.
     DWORD cMaxResult;           // # max result entries. '0' = 1 entry. max 0x10000 entries.
     DWORD cSearch;              // number of valid search entries
-    VMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY search[VMM_MEMORY_SEARCH_MAX];
+    PVMM_MEMORY_SEARCH_CONTEXT_SEARCHENTRY pSearch;     // pointer to an array of cSearch entries.
     QWORD vaMin;                // min address to search (page-aligned).
     QWORD vaMax;                // max address to search (page-aligned), if 0 max memory is assumed.
     QWORD vaCurrent;            // current address (may be read by caller).
@@ -2111,6 +2097,7 @@ typedef struct tdVMM_MEMORY_SEARCH_CONTEXT {
 * Search may take a long time. It's not recommended to run this interactively.
 * To cancel a search prematurely set the fAbortRequested flag in pctx and
 * wait a short while.
+* NB! This function is similar to VmmYaraUtil_SearchSingleProcess()
 * CALLER DECREF: ppObAddressResult
 * -- H
 * -- pProcess
@@ -2258,22 +2245,6 @@ PVMM_PROCESS VmmProcessGetEx(_In_ VMM_HANDLE H, _In_opt_ PVMMOB_PROCESS_TABLE pt
 PVMM_PROCESS VmmProcessGet(_In_ VMM_HANDLE H, _In_ DWORD dwPID);
 
 /*
-* Retrieve the next process given a process and a process table. This may be
-* useful when iterating over a process list. NB! Listing of next item may fail
-* prematurely if the previous process is terminated while having a reference
-* to it.
-* FUNCTION DECREF: pProcess
-* CALLER DECREF: return
-* -- H
-* -- pt
-* -- pProcess = a process struct, or NULL if first.
-*    NB! function DECREF's  pProcess and must not be used after call!
-* -- flags = 0 (recommended) or VMM_FLAG_PROCESS_[TOKEN|SHOW_TERMINATED].
-* -- return = a process struct, or NULL if not found.
-*/
-PVMM_PROCESS VmmProcessGetNextEx(_In_ VMM_HANDLE H, _In_opt_ PVMMOB_PROCESS_TABLE pt, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD flags);
-
-/*
 * Retrieve processes sorted in a map keyed by either EPROCESS or PID.
 * CALLER DECREF: return
 * -- H
@@ -2285,18 +2256,31 @@ _Success_(return != NULL)
 POB_MAP VmmProcessGetAll(_In_ VMM_HANDLE H, _In_ BOOL fByEPROCESS, _In_ QWORD flags);
 
 /*
-* Retrieve the next process given a process. This may be useful when iterating
-* over a process list. NB! Listing of next item may fail prematurely if the
-* previous process is terminated while having a reference to it.
-* FUNCTION DECREF: pProcess
+* Retrieve the next process given a process and a process table. This may be
+* useful when iterating over a process list.
+* FUNCTION DECREF: pObProcess
 * CALLER DECREF: return
 * -- H
+* -- pt = the process table to iterate over (only taken into account when pObProcess is NULL).
 * -- pProcess = a process struct, or NULL if first.
+*    NB! function DECREF's  pProcess and must not be used after call!
+* -- flags = 0 (recommended) or VMM_FLAG_PROCESS_[TOKEN|SHOW_TERMINATED].
+* -- return = a process struct, or NULL if not found.
+*/
+PVMM_PROCESS VmmProcessGetNextEx(_In_ VMM_HANDLE H, _In_opt_ PVMMOB_PROCESS_TABLE pt, _In_opt_ PVMM_PROCESS pObProcess, _In_ QWORD flags);
+
+/*
+* Retrieve the next process given a process. This may be useful when iterating
+* over a process list.
+* FUNCTION DECREF: pObProcess
+* CALLER DECREF: return
+* -- H
+* -- pObProcess = a process struct, or NULL if first.
 *    NB! function DECREF's  pProcess and must not be used after call!
 * -- flags = 0 (recommended) or VMM_FLAG_PROCESS_[TOKEN|SHOW_TERMINATED]
 * -- return = a process struct, or NULL if not found.
 */
-PVMM_PROCESS VmmProcessGetNext(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_ QWORD flags);
+PVMM_PROCESS VmmProcessGetNext(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pObProcess, _In_ QWORD flags);
 
 /*
 * Clone an original process entry creating a shallow clone. The user of this
@@ -2354,6 +2338,17 @@ QWORD VmmProcess_GetExitTimeOpt(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProces
 * -- H
 */
 VOID VmmProcessCreateFinish(_In_ VMM_HANDLE H);
+
+/*
+* Try to force clear the internal state of a process object without refreshing
+* the whole process list. This may be useful when a quick update of a process
+* must take place.
+* This is however prone to potential race conditions and possible corrpution!
+* Use with extreme care at own risk!
+* -- H
+* -- pProcess
+*/
+VOID VmmProcessForceClearState_DoNotUse(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess);
 
 /*
 * List the PIDs and put them into the supplied table.
@@ -2439,10 +2434,10 @@ VOID VmmCachePrefetchPages4(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _
 * -- pmPrefetch = map of objects.
 * -- cb
 * -- flags
-* -- pfnFilter = filter as required by ObMap_FilterSet function.
+* -- pfnFilterCB = filter as required by ObMap_FilterSet function.
 * -- return = at least one object is found to be prefetched into cache.
 */
-BOOL VmmCachePrefetchPages5(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_opt_ POB_MAP pmPrefetchObjects, _In_ DWORD cb, _In_ QWORD flags, _In_ VOID(*pfnFilter)(_In_ QWORD k, _In_ PVOID v, _Inout_ POB_SET ps));
+BOOL VmmCachePrefetchPages5(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _In_opt_ POB_MAP pmPrefetchObjects, _In_ DWORD cb, _In_ QWORD flags, _In_ OB_MAP_FILTERSET_PFN_CB pfnFilterCB);
 
 /*
 * Initialize the memory model specified and discard any previous memory models
@@ -2469,6 +2464,16 @@ VOID VmmInitializeMemoryModel(_In_ VMM_HANDLE H, _In_ VMM_MEMORYMODEL_TP tp);
 */
 _Success_(return)
 BOOL VmmMap_GetPte(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_PTE *ppObPteMap, _In_ BOOL fExtendedText);
+
+/*
+* Retrieve a single PVMM_MAP_PTEENTRY for a given PteMap and address inside it.
+* -- H
+* -- pPteMap
+* -- va
+* -- return = PTR to PTEENTRY or NULL on fail. Must not be used out of pPteMap scope.
+*/
+_Success_(return != NULL)
+PVMM_MAP_PTEENTRY VmmMap_GetPteEntry(_In_ VMM_HANDLE H, _In_opt_ PVMMOB_MAP_PTE pPteMap, _In_ QWORD va);
 
 /*
 * Retrieve the VAD memory map.
@@ -2526,7 +2531,7 @@ BOOL VmmMap_GetModule(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ DWORD 
 * -- return = PTR to VMM_MAP_MODULEENTRY or NULL on fail. Must not be used out of pModuleMap scope.
 */
 _Success_(return != NULL)
-PVMM_MAP_MODULEENTRY VmmMap_GetModuleEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_MODULE pModuleMap, _In_ LPSTR uszModuleName);
+PVMM_MAP_MODULEENTRY VmmMap_GetModuleEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_MODULE pModuleMap, _In_ LPCSTR uszModuleName);
 
 /*
 * Retrieve a single VMM_MAP_MODULEENTRY for a given process and module name.
@@ -2541,7 +2546,7 @@ PVMM_MAP_MODULEENTRY VmmMap_GetModuleEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_MO
 * -- return
 */
 _Success_(return)
-BOOL VmmMap_GetModuleEntryEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcessOpt, _In_opt_ DWORD dwPidOpt, _In_opt_ LPSTR uszModuleName, _In_ DWORD flags, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap, _Out_ PVMM_MAP_MODULEENTRY *pModuleEntry);
+BOOL VmmMap_GetModuleEntryEx(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcessOpt, _In_opt_ DWORD dwPidOpt, _In_opt_ LPCSTR uszModuleName, _In_ DWORD flags, _Out_ PVMMOB_MAP_MODULE *ppObModuleMap, _Out_ PVMM_MAP_MODULEENTRY *pModuleEntry);
 
 /*
 * Retrieve a single PVMM_MAP_MODULEENTRY for a given ModuleMap and virtual address inside it.
@@ -2596,7 +2601,7 @@ BOOL VmmMap_GetEAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_
 * -- return
 */
 _Success_(return)
-BOOL VmmMap_GetEATEntryIndexU(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_EAT pEatMap, _In_ LPSTR uszFunctionName, _Out_ PDWORD pdwEntryIndex);
+BOOL VmmMap_GetEATEntryIndexU(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_EAT pEatMap, _In_ LPCSTR uszFunctionName, _Out_ PDWORD pdwEntryIndex);
 
 /*
 * Retrieve the process module import address table (IAT) map.
@@ -2680,17 +2685,6 @@ PVMM_MAP_THREADENTRY VmmMap_GetThreadEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_TH
 */
 _Success_(return)
 BOOL VmmMap_GetHandle(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_HANDLE *ppObHandleMap, _In_ BOOL fExtendedText);
-
-/*
-* Retrieve the EVIL map
-* CALLER DECREF: ppObEvilMap
-* -- H
-* -- pProcess = retrieve for specific process, or if NULL for all processes.
-* -- ppObEvilMap
-* -- return
-*/
-_Success_(return)
-BOOL VmmMap_GetEvil(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _Out_ PVMMOB_MAP_EVIL *ppObEvilMap);
 
 /*
 * Retrieve the OBJECT MANAGER map

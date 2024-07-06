@@ -11,7 +11,7 @@
 //  - physical memory.
 //  - vm guest physical memory.
 //
-// (c) Ulf Frisk, 2022-2023
+// (c) Ulf Frisk, 2022-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -19,21 +19,42 @@
 PyObject *g_pPyType_ScatterMemory = NULL;
 
 // (ULONG64, DWORD) -> None
+// [[ULONG64, DWORD], ..] -> None
+// NB! GIL not released due to high-performance native calls.
 static PyObject*
 VmmPycScatterMemory_prepare(PyObj_ScatterMemory *self, PyObject *args)
 {
+    PyObject *pyList, *pyListItem, *pyA, *pyCB;
     BOOL result;
-    DWORD cb;
+    DWORD c, i, cb;
     ULONG64 qwA;
+    SIZE_T cArgs;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "Kk", &qwA, &cb)) {
-        return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Illegal argument.");
+    cArgs = PyTuple_Size(args);
+    // single prepare:
+    if((cArgs == 2) && PyArg_ParseTuple(args, "KI", &qwA, &cb)) {
+        result = VMMDLL_Scatter_Prepare(self->hScatter, qwA, cb);
+        if(!result) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Failed."); }
+        Py_INCREF(Py_None); return Py_None;                 // None returned on success.        
     }
-    Py_BEGIN_ALLOW_THREADS;
-    result = VMMDLL_Scatter_Prepare(self->hScatter, qwA, cb);
-    Py_END_ALLOW_THREADS;
-    if(!result) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Failed."); }
-    return Py_BuildValue("s", NULL);        // None returned on success.
+    // multi prepare:
+    if((cArgs == 1) && PyArg_ParseTuple(args, "O!", &PyList_Type, &pyList)) {
+        c = (DWORD)PyList_Size(pyList);
+        for(i = 0; i < c; i++) {
+            pyListItem = PyList_GetItem(pyList, i);         // borrowed reference
+            if(!pyListItem || !PyList_Check(pyListItem) || (2 != PyList_Size(pyListItem))) { goto fail; }
+            pyA = PyList_GetItem(pyListItem, 0);            // borrowed reference
+            pyCB = PyList_GetItem(pyListItem, 1);           // borrowed reference
+            if(!pyA || !pyCB || !PyLong_Check(pyA) || !PyLong_Check(pyCB)) { goto fail; }
+            qwA = PyLong_AsUnsignedLongLong(pyA);
+            cb = PyLong_AsUnsignedLong(pyCB);
+            result = VMMDLL_Scatter_Prepare(self->hScatter, qwA, cb);
+            if(!result) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Failed."); }
+        }
+        Py_INCREF(Py_None); return Py_None;                 // None returned on success. 
+    }
+fail:
+    return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.prepare(): Illegal argument.");
 }
 
 // () -> None
@@ -46,68 +67,150 @@ VmmPycScatterMemory_execute(PyObj_ScatterMemory *self, PyObject *args)
     result = VMMDLL_Scatter_ExecuteRead(self->hScatter);
     Py_END_ALLOW_THREADS;
     if(!result) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.execute(): Failed."); }
-    return Py_BuildValue("s", NULL);        // None returned on success.
+    Py_INCREF(Py_None); return Py_None;                     // None returned on success. 
 }
 
 // (ULONG64, DWORD) -> PBYTE
+// [[ULONG64, DWORD], ..] -> [PBYTE, ..]
+// NB! GIL not released due to high-performance native calls.
 static PyObject*
 VmmPycScatterMemory_read(PyObj_ScatterMemory *self, PyObject *args)
 {
-    PyObject *pyBytes;
+    PyObject *pyBytes, *pyList, *pyListItem, *pyA, *pyCB, *pyListResult;
     BOOL result;
     PBYTE pb;
-    DWORD cb, cbRead = 0;
+    DWORD c, i, cb, cbRead = 0;
     ULONG64 qwA;
+    SIZE_T cArgs;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "Kk", &qwA, &cb)) {
-        return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Illegal argument.");
+    cArgs = PyTuple_Size(args);
+    // single read:
+    if((cArgs == 2) && PyArg_ParseTuple(args, "KI", &qwA, &cb)) {
+        pb = LocalAlloc(0, cb);
+        if(!pb) { return PyErr_NoMemory(); }
+        result = VMMDLL_Scatter_Read(self->hScatter, qwA, cb, pb, &cbRead);
+        if(result) {
+            pyBytes = PyBytes_FromStringAndSize((const char*)pb, cbRead);
+            LocalFree(pb);
+            return pyBytes;
+        } else {
+            LocalFree(pb);
+            return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Failed.");
+        }
     }
-    pb = LocalAlloc(0, cb);
-    if(!pb) { return PyErr_NoMemory(); }
-    Py_BEGIN_ALLOW_THREADS;
-    result = VMMDLL_Scatter_Read(self->hScatter, qwA, cb, pb, &cbRead);
-    Py_END_ALLOW_THREADS;
-    if(!result) {
-        LocalFree(pb);
-        return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Failed.");
+    // multi read:
+    if((cArgs == 1) && PyArg_ParseTuple(args, "O!", &PyList_Type, &pyList)) {
+        pyListResult = PyList_New(0);
+        if(!pyListResult) { return PyErr_NoMemory(); }
+        c = (DWORD)PyList_Size(pyList);
+        for(i = 0; i < c; i++) {
+            pyListItem = PyList_GetItem(pyList, i);         // borrowed reference
+            if(!pyListItem || !PyList_Check(pyListItem) || (2 != PyList_Size(pyListItem))) { goto fail; }
+            pyA = PyList_GetItem(pyListItem, 0);            // borrowed reference
+            pyCB = PyList_GetItem(pyListItem, 1);           // borrowed reference
+            if(!pyA || !pyCB || !PyLong_Check(pyA) || !PyLong_Check(pyCB)) { goto fail; }
+            qwA = PyLong_AsUnsignedLongLong(pyA);
+            cb = PyLong_AsUnsignedLong(pyCB);
+            pb = LocalAlloc(0, cb);
+            if(!pb) { return PyErr_NoMemory(); }
+            result = VMMDLL_Scatter_Read(self->hScatter, qwA, cb, pb, &cbRead);
+            if(result) {
+                pyBytes = PyBytes_FromStringAndSize((const char*)pb, cbRead);
+                PyList_Append_DECREF(pyListResult, pyBytes);
+            } else {
+                PyList_Append(pyListResult, Py_None);
+            }
+            LocalFree(pb);
+        }
+        return pyListResult;
     }
-    pyBytes = PyBytes_FromStringAndSize((const char *)pb, cbRead);
-    LocalFree(pb);
-    return pyBytes;
+fail:
+    return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Illegal argument.");
+}
+
+// (ULONG64, STR) -> T
+// ([[ULONG64, STR], ..]) -> [T1, T2, ..]
+// NB! GIL not released due to high-performance native calls.
+static PyObject*
+VmmPycScatterMemory_read_type(PyObj_ScatterMemory *self, PyObject *args)
+{
+    PyObject *pyListSrc, *pyListItemSrc, *pyListResult = NULL, *pyLongAddress, *pyUnicodeTP;
+    DWORD iItem, cItem;
+    ULONG64 qwA, flags = 0;
+    BYTE pb8[8] = { 0 }, pbZERO[8] = { 0 }, *pbTP;
+    DWORD tp, cbTP, cbRead;
+    BOOL result;
+    SIZE_T cArgs;
+    if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read(): Not initialized."); }
+    cArgs = PyTuple_Size(args);
+    // Single type read on the format: (ULONG64, STR) -> T, Example: 0x1000, 'u32'
+    if((cArgs == 2) && PyArg_ParseTuple(args, "KO!", &qwA, &PyUnicode_Type, &pyUnicodeTP)) {
+        tp = VmmPyc_MemReadType_TypeCheck(pyUnicodeTP, &cbTP);
+        pbTP = pbZERO;
+        if(cbTP) {
+            result = VMMDLL_Scatter_Read(self->hScatter, qwA, cbTP, pb8, &cbRead);
+            if(result && (cbTP == cbRead)) {
+                pbTP = pb8;
+            }
+        }
+        return VmmPyc_MemReadType_TypeGet(tp, pbTP);
+    }
+    // Multi read on the format: ([[ULONG64, STR], ..]) -> [T, ..], Example: [[0x1000, 'u32'], [0x2000, 'u32']]
+    if((cArgs == 1) && PyArg_ParseTuple(args, "O!", &PyList_Type, &pyListSrc)) {
+        cItem = (DWORD)PyList_Size(pyListSrc);
+        pyListResult = PyList_New(0);
+        if(!pyListResult) { return PyErr_NoMemory(); }
+        for(iItem = 0; iItem < cItem; iItem++) {
+            pyListItemSrc = PyList_GetItem(pyListSrc, iItem);           // borrowed reference
+            if(!pyListItemSrc || !PyList_Check(pyListItemSrc)) { goto fail; }
+            pyLongAddress = PyList_GetItem(pyListItemSrc, 0);           // borrowed reference
+            pyUnicodeTP = PyList_GetItem(pyListItemSrc, 1);             // borrowed reference
+            if(!pyLongAddress || !pyUnicodeTP || !PyLong_Check(pyLongAddress) || !PyUnicode_Check(pyUnicodeTP)) { goto fail; }
+            qwA = PyLong_AsUnsignedLongLong(pyLongAddress);
+            tp = VmmPyc_MemReadType_TypeCheck(pyUnicodeTP, &cbTP);
+            pbTP = pbZERO;
+            if(cbTP) {
+                result = VMMDLL_Scatter_Read(self->hScatter, qwA, cbTP, pb8, &cbRead);
+                if(result && (cbTP == cbRead)) {
+                    pbTP = pb8;
+                }
+            }
+            PyList_Append_DECREF(pyListResult, VmmPyc_MemReadType_TypeGet(tp, pbTP));
+        }
+        return pyListResult;
+    }
+fail:
+    return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.read_type(): Illegal argument.");
 }
 
 // ((DWORD, DWORD)) -> None
+// NB! GIL not released due to high-performance native calls.
 static PyObject*
 VmmPycScatterMemory_clear(PyObj_ScatterMemory *self, PyObject *args)
 {
     BOOL result;
-    DWORD dwPID, dwReadFlags;
+    DWORD dwReadFlags;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.clear(): Not initialized."); }
-    dwPID = self->dwPID;
     dwReadFlags = self->dwReadFlags;
-    if(!PyArg_ParseTuple(args, "|kk", &dwPID, &dwReadFlags)) {
+    if(!PyArg_ParseTuple(args, "|I", &dwReadFlags)) {
         return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.clear(): Illegal argument.");
     }
-    Py_BEGIN_ALLOW_THREADS;
-    result = VMMDLL_Scatter_Clear(self->hScatter, dwPID, dwReadFlags);
-    Py_END_ALLOW_THREADS;
+    result = VMMDLL_Scatter_Clear(self->hScatter, self->dwPID, dwReadFlags);
     if(!result) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.clear(): Failed."); }
-    self->dwPID = dwPID;
     self->dwReadFlags = dwReadFlags;
-    return Py_BuildValue("s", NULL);        // None returned on success.
+    Py_INCREF(Py_None); return Py_None;                 // None returned on success.
 }
 
 // () -> None
+// NB! GIL not released due to high-performance native calls.
 static PyObject*
 VmmPycScatterMemory_close(PyObj_ScatterMemory *self, PyObject *args)
 {
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "VmmScatterMemory.close(): Not initialized."); }
     self->fValid = FALSE;
-    Py_BEGIN_ALLOW_THREADS;
     VMMDLL_Scatter_CloseHandle(self->hScatter);
-    Py_END_ALLOW_THREADS;
     self->hScatter = NULL;
-    return Py_BuildValue("s", NULL);        // None returned on success.
+    Py_INCREF(Py_None); return Py_None;                 // None returned on success. 
 }
 
 //-----------------------------------------------------------------------------
@@ -160,18 +263,20 @@ VmmPycScatterMemory_dealloc(PyObj_ScatterMemory *self)
 {
     self->fValid = FALSE;
     VMMDLL_Scatter_CloseHandle(self->hScatter);
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)
 BOOL VmmPycScatterMemory_InitializeType(PyObject *pModule)
 {
     static PyMethodDef PyMethods[] = {
-        {"prepare", (PyCFunction)VmmPycScatterMemory_prepare, METH_VARARGS, "Prepare a memory region to be read in a subsequent execute() call."},
-        {"execute", (PyCFunction)VmmPycScatterMemory_execute, METH_VARARGS, "Read prepared memory regions into the ScatterMemory object.."},
-        {"read",    (PyCFunction)VmmPycScatterMemory_read,    METH_VARARGS, "Read resulting scatter memory (after execute() has been called."},
-        {"clear",   (PyCFunction)VmmPycScatterMemory_clear,   METH_VARARGS, "Clear the scatter memory object and release some internal resources."},
-        {"close",   (PyCFunction)VmmPycScatterMemory_close,   METH_VARARGS, "Manually Close the scatter object and deallocate all native memory."},
+        {"prepare",     (PyCFunction)VmmPycScatterMemory_prepare,   METH_VARARGS, "Prepare a memory region to be read in a subsequent execute() call."},
+        {"execute",     (PyCFunction)VmmPycScatterMemory_execute,   METH_VARARGS, "Read prepared memory regions into the ScatterMemory object.."},
+        {"read",        (PyCFunction)VmmPycScatterMemory_read,      METH_VARARGS, "Read resulting scatter memory (after execute() has been called."},
+        {"read_type",   (PyCFunction)VmmPycScatterMemory_read_type, METH_VARARGS, "Read user-defined type(s)."},
+        {"clear",       (PyCFunction)VmmPycScatterMemory_clear,     METH_VARARGS, "Clear the scatter memory object and release some internal resources."},
+        {"close",       (PyCFunction)VmmPycScatterMemory_close,     METH_VARARGS, "Manually Close the scatter object and deallocate all native memory."},
         {NULL, NULL, 0, NULL}
     };
     static PyMemberDef PyMembers[] = {

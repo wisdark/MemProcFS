@@ -1,6 +1,6 @@
 // vmmpyc_processmaps.c : implementation of process infomaps functionality for vmmpyc.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #include "vmmpyc.h"
@@ -154,7 +154,7 @@ VmmPycProcessMaps_vad_ex(PyObj_ProcessMaps *self, PyObject *args)
     PVMMDLL_MAP_VADEXENTRY pe;
     PVMMDLL_MAP_VADEX pVadExMap = NULL;
     if(!self->fValid) { return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.vad_ex(): Not initialized."); }
-    if(!PyArg_ParseTuple(args, "kk", &oPage, &cPage)) {
+    if(!PyArg_ParseTuple(args, "II", &oPage, &cPage)) {
         return PyErr_Format(PyExc_RuntimeError, "ProcessMaps.vad_ex(): Illegal argument.");
     }
     if(!(pyList = PyList_New(0))) { return PyErr_NoMemory(); }
@@ -172,6 +172,7 @@ VmmPycProcessMaps_vad_ex(PyObj_ProcessMaps *self, PyObject *args)
             pe = pVadExMap->pMap + i;
             PyDict_SetItemString_DECREF(pyDict, "tp", PyUnicode_FromFormat("%c", VmmPycProcessMaps_vad_ex_Type(pe->tp)));
             PyDict_SetItemString_DECREF(pyDict, "pml", PyLong_FromUnsignedLong(pe->iPML));
+            PyDict_SetItemString_DECREF(pyDict, "pteflags", PyLong_FromUnsignedLong(pe->pteFlags));
             PyDict_SetItemString_DECREF(pyDict, "va", PyLong_FromUnsignedLongLong(pe->va));
             PyDict_SetItemString_DECREF(pyDict, "pa", PyLong_FromUnsignedLongLong(pe->pa));
             PyDict_SetItemString_DECREF(pyDict, "pte", PyLong_FromUnsignedLongLong(pe->pte));
@@ -339,11 +340,13 @@ VmmPycProcessMaps_thread(PyObj_ProcessMaps *self, PyObject *args)
             PyDict_SetItemString_DECREF(pyDict, "va-ethread", PyLong_FromUnsignedLongLong(pe->vaETHREAD));
             PyDict_SetItemString_DECREF(pyDict, "va-teb", PyLong_FromUnsignedLongLong(pe->vaTeb));
             PyDict_SetItemString_DECREF(pyDict, "va-start", PyLong_FromUnsignedLongLong(pe->vaStartAddress));
+            PyDict_SetItemString_DECREF(pyDict, "va-win32start", PyLong_FromUnsignedLongLong(pe->vaWin32StartAddress));
             PyDict_SetItemString_DECREF(pyDict, "va-stackbase", PyLong_FromUnsignedLongLong(pe->vaStackBaseUser));
             PyDict_SetItemString_DECREF(pyDict, "va-stacklimit", PyLong_FromUnsignedLongLong(pe->vaStackLimitUser));
             PyDict_SetItemString_DECREF(pyDict, "va-stackbase-kernel", PyLong_FromUnsignedLongLong(pe->vaStackBaseKernel));
             PyDict_SetItemString_DECREF(pyDict, "va-stacklimit-kernel", PyLong_FromUnsignedLongLong(pe->vaStackLimitKernel));
             PyDict_SetItemString_DECREF(pyDict, "va-trapframe", PyLong_FromUnsignedLongLong(pe->vaTrapFrame));
+            PyDict_SetItemString_DECREF(pyDict, "va-impersonation-token", PyLong_FromUnsignedLongLong(pe->vaImpersonationToken));
             PyDict_SetItemString_DECREF(pyDict, "reg-rip", PyLong_FromUnsignedLongLong(pe->vaRIP));
             PyDict_SetItemString_DECREF(pyDict, "reg-rsp", PyLong_FromUnsignedLongLong(pe->vaRSP));
             PyDict_SetItemString_DECREF(pyDict, "time-create", PyLong_FromUnsignedLongLong(pe->ftCreateTime));
@@ -434,7 +437,8 @@ static void
 VmmPycProcessMaps_dealloc(PyObj_ProcessMaps *self)
 {
     self->fValid = FALSE;
-    Py_XDECREF(self->pyVMM); self->pyVMM = NULL;
+    Py_XDECREF(self->pyVMM);
+    PyObject_Del(self);
 }
 
 _Success_(return)

@@ -1,6 +1,6 @@
 // oscompatibility.h : VMM Windows/Linux compatibility layer.
 //
-// (c) Ulf Frisk, 2021-2023
+// (c) Ulf Frisk, 2021-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 #ifndef __OSCOMPATIBILITY_H__
@@ -19,9 +19,23 @@
 #define STATUS_FILE_INVALID                 ((NTSTATUS)0xC0000098L)
 #define STATUS_FILE_SYSTEM_LIMITATION       ((NTSTATUS)0xC0000427L)
 typedef unsigned __int64                    QWORD, *PQWORD;
+_Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName);
+
+#ifdef _WIN64
+#define VMM_64BIT
+#else /* _WIN64 */
+#define VMM_32BIT
+#endif /* _WIN64 */
 
 #endif /* _WIN32 */
 #ifdef LINUX
+
+#if __SIZEOF_POINTER__ == 8
+#define VMM_64BIT
+#else /* __SIZEOF_POINTER__ */
+#define VMM_32BIT
+#endif /* __SIZEOF_POINTER__ */
+
 #include <byteswap.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -42,7 +56,8 @@ typedef unsigned __int64                    QWORD, *PQWORD;
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <openssl/sha.h>
+#undef  AF_INET6
+#define AF_INET6 23
 
 #define VMM_LIBRARY_FILETYPE                ".so"
 
@@ -52,12 +67,14 @@ typedef uint32_t                            BOOL, *PBOOL;
 typedef uint8_t                             BYTE, *PBYTE, *LPBYTE;
 typedef uint8_t                             UCHAR, *PUCHAR;
 typedef char                                CHAR, *PCHAR, *PSTR, *LPSTR;
+typedef const char                          *LPCSTR;
 typedef int16_t                             SHORT, *PSHORT;
-typedef int32_t                             UINT, LONG;
+typedef int32_t                             LONG;
 typedef int64_t                             LONGLONG;
 typedef uint16_t                            WORD, *PWORD, USHORT, *PUSHORT;
-typedef uint16_t                            WCHAR, *PWCHAR, *LPWSTR, *LPCWSTR;
-typedef uint32_t                            DWORD, *PDWORD, *LPDWORD, NTSTATUS, ULONG, *PULONG, ULONG32;
+typedef uint16_t                            WCHAR, *PWCHAR, *LPWSTR;
+typedef const uint16_t                      *LPCWSTR;
+typedef uint32_t                            UINT, DWORD, *PDWORD, *LPDWORD, NTSTATUS, ULONG, *PULONG, ULONG32;
 typedef long long unsigned int              QWORD, *PQWORD, ULONG64, *PULONG64, ULONG_PTR;
 typedef uint64_t                            DWORD64, *PDWORD64, LARGE_INTEGER, *PLARGE_INTEGER, ULONGLONG, FILETIME, *PFILETIME;
 typedef size_t                              SIZE_T, *PSIZE_T;
@@ -69,6 +86,7 @@ typedef struct tdSID                        { BYTE pb[12]; } SID, *PSID;
 typedef DWORD(*PTHREAD_START_ROUTINE)(PVOID);
 typedef DWORD(*LPTHREAD_START_ROUTINE)(PVOID);
 typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void const *);
+#define __forceinline                       inline __attribute__((always_inline))
 #define WINAPI
 #define errno_t                             int
 #define CONST                               const
@@ -110,6 +128,8 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define STATUS_END_OF_FILE                  ((NTSTATUS)0xC0000011L)
 #define STATUS_FILE_INVALID                 ((NTSTATUS)0xC0000098L)
 #define STATUS_FILE_SYSTEM_LIMITATION       ((NTSTATUS)0xC0000427L)
+#define COMPRESSION_FORMAT_XPRESS           (0x0003)   
+#define COMPRESSION_FORMAT_XPRESS_HUFF      (0x0004)
 
 //-----------------------------------------------------------------------------
 // SAL DEFINES BELOW:
@@ -144,6 +164,7 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define _Outptr_
 #define _Post_ptr_invalid_
 #define _Printf_format_string_
+#define _Ret_maybenull_
 #define _Success_(x)
 #define _When_(x,y)
 #define _Writable_bytes_(x)
@@ -166,7 +187,6 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define sprintf_s(s, maxcount, ...)         (snprintf(s, maxcount, __VA_ARGS__))
 #define strnlen_s(s, maxcount)              (strnlen(s, maxcount))
 #define strcpy_s(dst, len, src)             (strncpy(dst, src, len))
-#define strncpy_s(dst, len, src, srclen)    (strncpy(dst, src, min((size_t)(max(1, len)) - 1, (size_t)(srclen))))
 #define strncat_s(dst, dstlen, src, srclen) (strncat(dst, src, min((((strlen(dst) + 1 >= (size_t)(dstlen)) || ((size_t)(dstlen) == 0)) ? 0 : ((size_t)(dstlen) - strlen(dst) - 1)), (size_t)(srclen))))
 #define strcat_s(dst, dstlen, src)          (strncat_s(dst, dstlen, src, _TRUNCATE))
 #define _vsnprintf_s(dst, len, cnt, fmt, a) (vsnprintf(dst, min((size_t)(len), (size_t)(cnt)), fmt, a))
@@ -192,11 +212,11 @@ typedef int(*_CoreCrtNonSecureSearchSortCompareFunction)(void const *, void cons
 #define InterlockedIncrement(p)             (__sync_add_and_fetch_4(p, 1))
 #define InterlockedDecrement(p)             (__sync_sub_and_fetch_4(p, 1))
 #define GetCurrentProcess()					((HANDLE)-1)
-#define InetNtopA                           inet_ntop
+#define InetNtopA(af,a,pb,cb)               inet_ntop(((af)==23?10:(af)),a,pb,cb)
 #define closesocket(s)                      close(s)
 #define HeapAlloc(hHeap, dwFlags, dwBytes)  malloc(dwBytes)
 
-HMODULE LoadLibraryA(LPSTR lpFileName);
+_Ret_maybenull_ HMODULE WINAPI LoadLibraryU(_In_ LPCSTR lpLibFileName);
 BOOL FreeLibrary(_In_ HMODULE hLibModule);
 FARPROC GetProcAddress(_In_opt_ HMODULE hModule, _In_ LPSTR lpProcName);
 
@@ -267,6 +287,7 @@ BOOL SetEvent(_In_ HANDLE hEventIngestPhys);
 HANDLE CreateEvent(_In_opt_ PVOID lpEventAttributes, _In_ BOOL bManualReset, _In_ BOOL bInitialState, _In_opt_ PVOID lpName);
 DWORD WaitForMultipleObjects(_In_ DWORD nCount, HANDLE *lpHandles, _In_ BOOL bWaitAll, _In_ DWORD dwMilliseconds);
 DWORD WaitForSingleObject(_In_ HANDLE hHandle, _In_ DWORD dwMilliseconds);
+int strncpy_s(char *dst, size_t dst_size, const char *src, size_t count);
 int _vscprintf(_In_z_ _Printf_format_string_ char const *const _Format, va_list _ArgList);
 
 // for some unexplainable reasons the gcc on -O2 will optimize out functionality

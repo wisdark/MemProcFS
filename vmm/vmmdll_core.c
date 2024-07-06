@@ -1,15 +1,17 @@
 // vmmdll_core.c : implementation of core library functionality which mainly
 //      consists of library initialization and cleanup/close functionality.
 //
-// (c) Ulf Frisk, 2022-2023
+// (c) Ulf Frisk, 2022-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
 #include "vmm.h"
 #include "vmmdll.h"
+#include "vmmdll_remote.h"
 #include "vmmlog.h"
 #include "vmmproc.h"
 #include "vmmwork.h"
+#include "vmmuserconfig.h"
 #include "ob/ob.h"
 #include "ob/ob_tag.h"
 #include "charutil.h"
@@ -30,11 +32,11 @@
 static BOOL g_VMMDLL_INITIALIZED            = FALSE;
 static POB_MAP g_VMMDLL_ALLOCMAP_EXT        = NULL;
 static CRITICAL_SECTION g_VMMDLL_CORE_LOCK  = { 0 };
-static POB_MAP g_VMMDLL_CORE_ALLHANDLE      = NULL;
 static DWORD g_VMMDLL_CORE_HANDLE_COUNT     = 0;
 static VMM_HANDLE g_VMMDLL_CORE_HANDLES[VMM_HANDLE_MAX_COUNT] = { 0 };
 
 // forward declarations below:
+VOID VmmDllRemote_InitializeGlobals();
 VOID VmmDllCore_MemLeakFindExternal(_In_ VMM_HANDLE H);
 VOID VmmDllCore_CloseHandle(_In_opt_ _Post_ptr_invalid_ VMM_HANDLE H, _In_ BOOL fForceCloseAll);
 
@@ -57,6 +59,7 @@ BOOL WINAPI DllMain(_In_ HINSTANCE hinstDLL, _In_ DWORD fdwReason, _In_ PVOID lp
 {    
     if(fdwReason == DLL_PROCESS_ATTACH) {
         VmmDllCore_InitializeGlobals();
+        VmmDllRemote_InitializeGlobals();
     }
     return TRUE;
 }
@@ -65,6 +68,7 @@ BOOL WINAPI DllMain(_In_ HINSTANCE hinstDLL, _In_ DWORD fdwReason, _In_ PVOID lp
 __attribute__((constructor)) VOID VmmAttach()
 {
     VmmDllCore_InitializeGlobals();
+    VmmDllRemote_InitializeGlobals();
 }
 #endif /* LINUX */
 
@@ -80,18 +84,19 @@ _Success_(return)
 BOOL VmmDllCore_HandleReserveExternal(_In_opt_ VMM_HANDLE H)
 {
     DWORD i = 0;
-    BOOL fResult = FALSE;
     if(!H || ((SIZE_T)H < 0x10000)) { return FALSE;}
     EnterCriticalSection(&g_VMMDLL_CORE_LOCK);
     for(i = 0; i < g_VMMDLL_CORE_HANDLE_COUNT; i++) {
         if(g_VMMDLL_CORE_HANDLES[i] == H) {
-            InterlockedIncrement(&H->cThreadExternal);
-            fResult = (H->magic == VMM_MAGIC) && !H->fAbort;
-            break;
+            if((H->magic == VMM_MAGIC) && !H->fAbort) {
+                InterlockedIncrement(&H->cThreadExternal);
+                LeaveCriticalSection(&g_VMMDLL_CORE_LOCK);
+                return TRUE;
+            }
         }
     }
     LeaveCriticalSection(&g_VMMDLL_CORE_LOCK);
-    return fResult;
+    return FALSE;
 }
 
 /*
@@ -125,7 +130,7 @@ VMM_HANDLE VmmDllCore_HandleDuplicate(_In_ VMM_HANDLE H)
 
 /*
 * Remove a handle from the external handle array.
-* NB! Function is to be called behind exclusive lock g_VMMDLL_CORE_LOCK_SRW.
+* NB! Function is to be called behind exclusive lock g_VMMDLL_CORE_LOCK.
 * -- H
 */
 VOID VmmDllCore_HandleRemove(_In_ VMM_HANDLE H)
@@ -149,7 +154,7 @@ VOID VmmDllCore_HandleRemove(_In_ VMM_HANDLE H)
 
 /*
 * Add a new handle to the external handle array.
-* NB! Function is to be called behind exclusive lock g_VMMDLL_CORE_LOCK_SRW.
+* NB! Function is to be called behind exclusive lock g_VMMDLL_CORE_LOCK.
 * -- H
 */
 _Success_(return)
@@ -257,6 +262,7 @@ VOID VmmDllCore_CloseHandle(_In_opt_ _Post_ptr_invalid_ VMM_HANDLE H, _In_ BOOL 
 {
     BOOL fCloseHandle = FALSE;
     QWORD tc, tcStart;
+    CHAR szTime[24];
     // Verify & decrement handle count.
     // If handle count > 0 (after decrement) return.
     // If handle count == 0 -> close and clean-up.
@@ -335,7 +341,12 @@ VOID VmmDllCore_CloseHandle(_In_opt_ _Post_ptr_invalid_ VMM_HANDLE H, _In_ BOOL 
     VmmDllCore_CloseHandle_VmmParentDetach(H);
     // Close logging (last)
     Statistics_CallSetEnabled(H, FALSE);
+    Util_FileTime2String(Util_FileTimeNow(), szTime);
+    VmmLog(H, MID_CORE, LOGLEVEL_VERBOSE, "SHUTDOWN COMPLETED (%p).", H);
+    VmmLog(H, MID_CORE, LOGLEVEL_VERBOSE, "  TIME: %s.", szTime);
+    VmmLog(H, MID_CORE, LOGLEVEL_VERBOSE, "  RUNTIME: %llus.\n", ((GetTickCount64() - H->cfg.tcTimeStart) / 1000));
     VmmLog_Close(H);
+    LocalFree(H->cfg.ForensicProcessSkipList.pusz);
     LocalFree(H);
 }
 
@@ -373,56 +384,48 @@ VOID VmmDllCore_PrintHelp(_In_ VMM_HANDLE H)
 {
     vmmprintf(H,
         "                                                                               \n" \
-        " THE MEMORY PROCESS FILE SYSTEM v%i.%i.%i COMMAND LINE REFERENCE:              \n" \
-        " The Memory Process File System may be used in stand-alone mode with support   \n" \
-        " for memory dump files, local memory via rekall winpmem driver or together with\n" \
-        " PCILeech if pcileech.dll is placed in the application directory. For infor-   \n" \
-        " mation about PCILeech please consult the separate PCILeech documentation.     \n" \
+        " MemProcFS v%i.%i.%i COMMAND LINE REFERENCE:                                   \n" \
+        " MemProcFS may be used in stand-alone mode with support for memory dump files, \n" \
+        " local memory via winpmem driver or together with PCILeech DMA devices.        \n" \
         " -----                                                                         \n" \
-        " The Memory Process File System (c) 2018-2021 Ulf Frisk                        \n" \
+        " MemProcFS (c) 2018-2023 Ulf Frisk                                             \n" \
         " License: GNU Affero General Public License v3.0                               \n" \
         " Contact information: pcileech@frizk.net                                       \n" \
-        " The Memory Process File System: https://github.com/ufrisk/MemProcFS           \n" \
-        " LeechCore:                      https://github.com/ufrisk/LeechCore           \n" \
-        " PCILeech:                       https://github.com/ufrisk/pcileech            \n" \
+        " MemProcFS:    https://github.com/ufrisk/MemProcFS                             \n" \
+        " LeechCore:    https://github.com/ufrisk/LeechCore                             \n" \
+        " PCILeech:     https://github.com/ufrisk/pcileech                              \n" \
         " -----                                                                         \n" \
-        " The recommended way to use the Memory Process File System is to specify the   \n" \
-        " memory acquisition device in the -device option and possibly more options.    \n" \
-        " Example 1: MemProcFS.exe -device c:\\temp\\memdump-win10x64.pmem              \n" \
-        " Example 2: MemProcFS.exe -device c:\\temp\\memdump-winXPx86.dumpit -v -vv     \n" \
+        " The recommended way to use MemProcFS is to specify a memory acquisition device\n" \
+        " in the -device option. Options -f and -z equals -device.                      \n" \
+        " Example 1: MemProcFS.exe -f c:\\temp\\memdump-win10x64.raw                    \n" \
+        " Example 2: MemProcFS.exe -device c:\\temp\\memdump-win10x64.dmp -forensic 1   \n" \
         " Example 3: MemProcFS.exe -device FPGA                                         \n" \
         " Example 4: MemProcFS.exe -device PMEM://c:\\temp\\winpmem_x64.sys             \n" \
-        " The Memory Process File System may also be started the memory dump file name  \n" \
-        " as the only option. This allows to make file extensions associated so that    \n" \
-        " they may be opened by double-clicking on them. This mode allows no options.   \n" \
-        " Example 4: MemProcFS.exe c:\\dumps\\memdump-win7x64.dumpit                    \n" \
         " -----                                                                         \n" \
         " Valid options:                                                                \n" \
         "   -device : select memory acquisition device or memory dump file to use.      \n" \
         "          Valid options: <any device supported by the leechcore library>       \n" \
         "          such as, but not limited to: <memory_dump_file>, PMEM, FPGA          \n" \
         "          ---                                                                  \n" \
-        "          <memory_dump_file> = memory dump file name optionally including path.\n" \
-        "          PMEM = use winpmem 'winpmem_64.sys' to acquire live memory.          \n" \
-        "          PMEM://c:\\path\\to\\winpmem_64.sys = path to winpmem driver.        \n" \
-        "          ---                                                                  \n" \
+        "          Options -f and -z equals -device.                                    \n" \
         "          Please see https://github.com/ufrisk/LeechCore for additional info.  \n" \
         "   -remote : connect to a remote host running the LeechAgent. Please see the   \n" \
         "          LeechCore documentation for more information.                        \n" \
+        "   -remotefs : connect to a remote LeechAgent hosting a remote MemProcFS.      \n" \
         "   -v   : verbose option. Additional information is displayed in the output.   \n" \
         "          Option has no value. Example: -v                                     \n" \
         "   -vv  : extra verbose option. More detailed additional information is shown  \n" \
         "          in output. Option has no value. Example: -vv                         \n" \
         "   -vvv : super verbose option. Show all data transferred such as PCIe TLPs.   \n" \
         "          Option has no value. Example: -vvv                                   \n" \
+        "   -version : display version.                                                 \n" \
         "   -logfile : specify an optional log file.                                    \n" \
         "   -loglevel : specify the log verbosity level as a comma-separated list.      \n" \
         "          Please consult https://github.com/ufrisk/MemProcFS/wiki for details. \n" \
         "          example: -loglevel 4,f:5,f:VMM:6                                     \n" \
-        "   -cr3 : base address of kernel/process page table (PML4) / CR3 CPU register. \n" \
         "   -max : memory max address, valid range: 0x0 .. 0xffffffffffffffff           \n" \
         "          default: auto-detect (max supported by device / target system).      \n" \
-        "   -memmap-str : specify a physical memory map in parameter agrument text.     \n" \
+        "   -memmap-str : specify a physical memory map in parameter argument text.     \n" \
         "   -memmap : specify a physical memory map given in a file or specify 'auto'.  \n" \
         "          example: -memmap c:\\temp\\my_custom_memory_map.txt                  \n" \
         "          example: -memmap auto                                                \n" \
@@ -444,7 +447,7 @@ VOID VmmDllCore_PrintHelp(_In_ VMM_HANDLE H)
         "          Example: -disable-symbols                                            \n" \
         "   -disable-infodb : disable the infodb and any symbol lookups via it.         \n" \
         "          Example: -disable-infodb                                             \n" \
-        "   -mount : drive letter/path to mount The Memory Process File system at.      \n" \
+        "   -mount : drive letter/path to mount MemProcFS at.                           \n" \
         "          default: M   Example: -mount Q                                       \n" \
         "   -norefresh : disable automatic cache and processes refreshes even when      \n" \
         "          running against a live memory target - such as PCIe FPGA or live     \n" \
@@ -453,10 +456,16 @@ VOID VmmDllCore_PrintHelp(_In_ VMM_HANDLE H)
         "          mounting file system and fully starting MemProcFS.                   \n" \
         "   -userinteract = allow vmm.dll to, on the console, query the user for        \n" \
         "          information such as, but not limited to, leechcore device options.   \n" \
-        "          Default: user interaction = disabled.                                \n" \
+        "          Default: user interaction = disabled. Combine with -forensic option. \n" \
         "   -vm        : virtual machine (VM) parsing.                                  \n" \
         "   -vm-basic  : virtual machine (VM) parsing (physical memory only).           \n" \
         "   -vm-nested : virtual machine (VM) parsing (including nested VMs).           \n" \
+        "   -license-accept-elastic-license-2-0 : accept the Elastic License 2.0 to     \n" \
+        "          enable built-in yara rules from Elastic.                             \n" \
+        "   -forensic-process-skip : comma-separated list of process names to skip.     \n" \
+        "   -forensic-yara-rules : perfom a forensic yara scan with specified rules.    \n" \
+        "          Full path to source or compiled yara rules should be specified.      \n" \
+        "          Example: -forensic-yara-rules \"C:\\Temp\\my_yara_rules.yar\"        \n" \
         "   -forensic : start a forensic scan of the physical memory immediately after  \n" \
         "          startup if possible. Allowed parameter values range from 0-4.        \n" \
         "          Note! forensic mode is not available for live memory.                \n" \
@@ -465,8 +474,7 @@ VOID VmmDllCore_PrintHelp(_In_ VMM_HANDLE H)
         "          2 = forensic mode with temp sqlite database deleted upon exit.       \n" \
         "          3 = forensic mode with temp sqlite database remaining upon exit.     \n" \
         "          4 = forensic mode with static named sqlite database (vmm.sqlite3).   \n" \
-        "          default: 0  Example -forensic 4                                      \n" \
-        "                                                                               \n",
+        "          default: 0  Example -forensic 4                                      \n",
         VERSION_MAJOR, VERSION_MINOR, VERSION_REVISION
     );
 }
@@ -482,17 +490,19 @@ VOID VmmDllCore_PrintHelp(_In_ VMM_HANDLE H)
 * -- return
 */
 _Success_(return)
-BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *argv[])
+BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ const char *argv[])
 {
-    char *argv2[3];
-    DWORD i = 0, iPageFile;
-    if((argc == 2) && argv[1][0] && (argv[1][0] != '-')) {
+    const char *argv2[3];
+    DWORD i = 0, dw, iPageFile;
+    if((argc == 2) && ((0 == _stricmp(argv[0], "-printf")) || (argv[0][0] != '-')) && argv[1][0] && (argv[1][0] != '-')) {
         // click to open -> only 1 argument ...
         argv2[0] = argv[0];
         argv2[1] = "-device";
         argv2[2] = argv[1];
         return VmmDllCore_InitializeConfig(H, 3, argv2);
     }
+    H->cfg.dwPteQualityThreshold = 0x20;
+    H->cfg.tcTimeStart = GetTickCount64();
     while(i < argc) {
         // "single argument" parameters below:
         if(0 == _stricmp(argv[i], "")) {
@@ -513,11 +523,23 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
         } else if(0 == _stricmp(argv[i], "-disable-symbolserver")) {
             H->cfg.fDisableSymbolServerOnStartup = TRUE;
             i++; continue;
+        } else if(0 == _stricmp(argv[i], "-disable-yara")) {
+            H->cfg.fDisableYara = TRUE;
+            i++; continue;
+        } else if(0 == _stricmp(argv[i], "-disable-yara-builtin")) {
+            H->cfg.fDisableYaraBuiltin = TRUE;
+            i++; continue;
+        } else if((0 == _stricmp(argv[i], "-license-accept-elastic-license-2.0")) || (0 == _stricmp(argv[i], "-license-accept-elastic-license-2-0"))) {
+            H->cfg.fLicenseAcceptElasticV2 = TRUE;
+            i++; continue;
         } else if(0 == _stricmp(argv[i], "-norefresh")) {
             H->cfg.fDisableBackgroundRefresh = TRUE;
             i++; continue;
         } else if(0 == _stricmp(argv[i], "-printf")) {
             H->cfg.fVerboseDll = TRUE;
+            i++; continue;
+        } else if(0 == _stricmp(argv[i], "-remotefs")) {
+            H->cfg.fRemoteFS = TRUE;
             i++; continue;
         } else if(0 == _stricmp(argv[i], "-userinteract")) {
             H->cfg.fUserInteract = TRUE;
@@ -530,6 +552,9 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
             i++; continue;
         } else if(0 == _stricmp(argv[i], "-vvv")) {
             H->cfg.fVerboseExtraTlp = TRUE;
+            i++; continue;
+        } else if(0 == _stricmp(argv[i], "-version")) {
+            H->cfg.fDisplayVersion = TRUE;
             i++; continue;
         } else if(0 == _stricmp(argv[i], "-waitinitialize")) {
             H->cfg.fWaitInitialize = TRUE;
@@ -556,19 +581,27 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
             H->cfg.qwParentVmmHandle = Util_GetNumericA(argv[i + 1]);
             H->cfg.fDisablePython = TRUE;
             i += 2; continue;
-        } else if(0 == _stricmp(argv[i], "-cr3")) {
+        } else if((0 == _stricmp(argv[i], "-arch")) || 0 == _stricmp(argv[i], "-architecture")) {
+            if(CharUtil_StrEquals(argv[i + 1], "x86", TRUE))    { H->cfg.tpMemoryModel = VMM_MEMORYMODEL_X86; }
+            if(CharUtil_StrEquals(argv[i + 1], "x86pae", TRUE)) { H->cfg.tpMemoryModel = VMM_MEMORYMODEL_X86PAE; }
+            if(CharUtil_StrEquals(argv[i + 1], "x64", TRUE))    { H->cfg.tpMemoryModel = VMM_MEMORYMODEL_X64; }
+            if(CharUtil_StrEquals(argv[i + 1], "arm64", TRUE))  { H->cfg.tpMemoryModel = VMM_MEMORYMODEL_ARM64; }
+            i += 2; continue;
+        } else if((0 == _stricmp(argv[i], "-cr3") || 0 == _stricmp(argv[i], "-dtb"))) {
             H->cfg.paCR3 = Util_GetNumericA(argv[i + 1]);
             i += 2; continue;
-        } else if((0 == _stricmp(argv[i], "-device")) || (0 == strcmp(argv[i], "-z"))) {
+        } else if(0 == _stricmp(argv[i], "-create-from-vmmid")) {
+            H->cfg.qwVmmID = Util_GetNumericA(argv[i + 1]);
+            return TRUE;    // special case: this parameter takes priority over all other parameters -> return TRUE now.
+        } else if(0 == _stricmp(argv[i], "-debug-pte-quality-threshold")) {
+            H->cfg.dwPteQualityThreshold = (DWORD)Util_GetNumericA(argv[i + 1]);
+            i += 2; continue;
+        } else if((0 == _stricmp(argv[i], "-device")) || (0 == strcmp(argv[i], "-f")) || (0 == strcmp(argv[i], "-z"))) {
             strcpy_s(H->dev.szDevice, MAX_PATH, argv[i + 1]);
             i += 2; continue;
         } else if(0 == _stricmp(argv[i], "-forensic")) {
             H->cfg.tpForensicMode = (DWORD)Util_GetNumericA(argv[i + 1]);
             if(H->cfg.tpForensicMode > FC_DATABASE_TYPE_MAX) { return FALSE; }
-            if(H->cfg.tpForensicMode) {
-                H->cfg.fWaitInitialize = TRUE;
-                H->cfg.fVM = TRUE;
-            }
             i += 2; continue;
         } else if(0 == _stricmp(argv[i], "-logfile")) {
             strcpy_s(H->cfg.szLogFile, MAX_PATH, argv[i + 1]);
@@ -576,11 +609,18 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
         } else if(0 == _stricmp(argv[i], "-loglevel")) {
             strcpy_s(H->cfg.szLogLevel, MAX_PATH, argv[i + 1]);
             i += 2; continue;
+        } else if(0 == _stricmp(argv[i], "-forensic-yara-rules")) {
+            strcpy_s(H->cfg.szForensicYaraRules, MAX_PATH, argv[i + 1]);
+            i += 2; continue;
+        } else if(0 == _stricmp(argv[i], "-forensic-process-skip")) {
+            CharUtil_SplitList((LPSTR)argv[i + 1], ',', &H->cfg.ForensicProcessSkipList.cusz, &H->cfg.ForensicProcessSkipList.pusz);
+            i += 2; continue;
         } else if(0 == _stricmp(argv[i], "-max")) {
             H->dev.paMax = Util_GetNumericA(argv[i + 1]);
             i += 2; continue;
         } else if(0 == _stricmp(argv[i], "-memmap")) {
             strcpy_s(H->cfg.szMemMap, MAX_PATH, argv[i + 1]);
+            if(!_stricmp(H->cfg.szMemMap, "auto")) { H->cfg.fMemMapAuto = TRUE; }
             i += 2; continue;
         } else if(0 == _stricmp(argv[i], "-memmap-str")) {
             strcpy_s(H->cfg.szMemMapStr, _countof(H->cfg.szMemMapStr), argv[i + 1]);
@@ -608,10 +648,26 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
         }
     }
     if(H->dev.paMax && (H->dev.paMax < 0x00100000)) { return FALSE; }
+    // disable memory auto-detect when memmap is specified:
     if(!H->dev.paMax && (H->cfg.szMemMap[0] || H->cfg.szMemMapStr[0])) {
-        // disable memory auto-detect when memmap is specified
         H->dev.paMax = -1;
     }
+    // yara rules implies forensic mode:
+    if(H->cfg.szForensicYaraRules[0] && !H->cfg.tpForensicMode) {
+        H->cfg.tpForensicMode = 1;
+    }
+    // forensic mode implies VM detection & wait for initialize:
+    if(H->cfg.tpForensicMode) {
+        H->cfg.fWaitInitialize = TRUE;
+        H->cfg.fVM = TRUE;
+    }
+    // cache license acceptance for forensic mode yara rules:
+    if(H->cfg.fLicenseAcceptElasticV2) {
+        VmmUserConfig_SetNumber("LicenseAcceptElasticLicense2.0", 1);
+    } else if(H->cfg.tpForensicMode) {
+        H->cfg.fLicenseAcceptElasticV2 = (VmmUserConfig_GetNumber("LicenseAcceptElasticLicense2.0", &dw) && (dw == 1));
+    }
+    // set other config values:
     H->cfg.fFileInfoHeader = TRUE;
     H->cfg.fVerbose = H->cfg.fVerbose && H->cfg.fVerboseDll;
     H->cfg.fVerboseExtra = H->cfg.fVerboseExtra && H->cfg.fVerboseDll;
@@ -621,33 +677,10 @@ BOOL VmmDllCore_InitializeConfig(_In_ VMM_HANDLE H, _In_ DWORD argc, _In_ char *
     H->dev.dwPrintfVerbosity |= H->cfg.fVerbose ? LC_CONFIG_PRINTF_V : 0;
     H->dev.dwPrintfVerbosity |= H->cfg.fVerboseExtra ? LC_CONFIG_PRINTF_VV : 0;
     H->dev.dwPrintfVerbosity |= H->cfg.fVerboseExtraTlp ? LC_CONFIG_PRINTF_VVV : 0;
+    Util_GetPathLib(H->cfg.szPathLibraryVmm);
+    strncat_s(H->cfg.szPathLibraryVmm, _countof(H->cfg.szPathLibraryVmm), "vmm", _TRUNCATE);
+    strncat_s(H->cfg.szPathLibraryVmm, _countof(H->cfg.szPathLibraryVmm), VMM_LIBRARY_FILETYPE, _TRUNCATE);
     return (H->dev.szDevice[0] != 0);
-}
-
-/*
-* Initialize memory map auto - i.e. retrieve it from the registry and load it into LeechCore.
-* -- H
-* -- return
-*/
-_Success_(return)
-BOOL VmmDllCore_InitializeMemMapAuto(_In_ VMM_HANDLE H)
-{
-    BOOL fResult = FALSE;
-    DWORD i, cbMemMap = 0;
-    LPSTR szMemMap = NULL;
-    PVMMOB_MAP_PHYSMEM pObMap = NULL;
-    if(!VmmMap_GetPhysMem(H, &pObMap)) { goto fail; }
-    if(!(szMemMap = LocalAlloc(LMEM_ZEROINIT, 0x01000000))) { goto fail; }
-    for(i = 0; i < pObMap->cMap; i++) {
-        cbMemMap += snprintf(szMemMap + cbMemMap, 0x01000000 - cbMemMap - 1, "%016llx %016llx\n", pObMap->pMap[i].pa, pObMap->pMap[i].pa + pObMap->pMap[i].cb - 1);
-    }
-    fResult =
-        LcCommand(H->hLC, LC_CMD_MEMMAP_SET, cbMemMap, (PBYTE)szMemMap, NULL, NULL) &&
-        LcGetOption(H->hLC, LC_OPT_CORE_ADDR_MAX, &H->dev.paMax);
-fail:
-    Ob_DECREF(pObMap);
-    LocalFree(szMemMap);
-    return fResult;
 }
 
 #ifdef _WIN32
@@ -750,7 +783,7 @@ BOOL VmmDllCore_Initialize_HandleAttachParent(_In_ VMM_HANDLE H, _In_ VMM_HANDLE
 * -- return
 */
 _Success_(return != NULL)
-VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPSTR argv[], _Out_opt_ PPLC_CONFIG_ERRORINFO ppLcErrorInfo)
+VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPCSTR argv[], _Out_opt_ PPLC_CONFIG_ERRORINFO ppLcErrorInfo)
 {
     VMM_HANDLE H = NULL;
     FILE *hFile = NULL;
@@ -760,6 +793,7 @@ VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPSTR argv[], _Out_opt_ P
     PLC_CONFIG_ERRORINFO pLcErrorInfo = NULL;
     LPSTR uszUserText;
     BYTE pbBuffer[3 * MAX_PATH];
+    QWORD qwVmmID;
     if(ppLcErrorInfo) { *ppLcErrorInfo = NULL; }
     // 1: allocate VMM_HANDLE object and initialize command line configuration.
     //    After config initialization call vmmprintf should work regardless of
@@ -767,11 +801,33 @@ VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPSTR argv[], _Out_opt_ P
     if(!(H = LocalAlloc(LMEM_ZEROINIT, sizeof(struct tdVMM_HANDLE)))) { goto fail_prelock; }
     H->magic = VMM_MAGIC;
     H->dwHandleCount = 1;
-    if(!VmmDllCore_InitializeConfig(H, (DWORD)argc, argv)) {
-        VmmDllCore_PrintHelp(H);
+    f = VmmDllCore_InitializeConfig(H, (DWORD)argc, argv);
+    if(H->cfg.fDisplayVersion) {
+        vmmprintf(H, "MemProcFS v%i.%i.%i\n", VERSION_MAJOR, VERSION_MINOR, VERSION_REVISION);
+    }
+    if(!f) {
+        if(!H->cfg.fDisplayVersion) {
+            VmmDllCore_PrintHelp(H);
+        }
         goto fail_prelock;
     }
-    // 2: If vmm is supposed to be created with a parent check conditions and retrieve the parent handle.
+    // 2.0: If -create-from-vmmid is specified, duplicate the parent VMM_HANDLE
+    //      increasing its refcount. This also disregards any other parameters
+    //      that may be specified.
+    if(H->cfg.qwVmmID) {
+        qwVmmID = H->cfg.qwVmmID;
+        LocalFree(H->cfg.ForensicProcessSkipList.pusz);
+        LocalFree(H);
+        return VmmDllCore_HandleDuplicate((VMM_HANDLE)qwVmmID);
+    }
+    // 2.1: If -remotefs is specified, try to connect to the remote MemProcFS
+    //      instance running under the remote LeechAgent. This is a special
+    //      case and will return a special VMM_HANDLE.
+    if(H->cfg.fRemoteFS) {
+        LocalFree(H);
+        return VmmDllRemote_Initialize(argc, argv, ppLcErrorInfo);
+    }
+    // 2.2: If vmm is supposed to be created with a parent check conditions and retrieve the parent handle.
     if(H->cfg.fVM && (sizeof(PVOID) < 8)) {
         vmmprintf(H, "MemProcFS: VM parsing is only available on 64-bit due to resource constraints.\n");
         goto fail_prelock;
@@ -816,7 +872,7 @@ VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPSTR argv[], _Out_opt_ P
     // 6: initialize/(refresh) the logging sub-system
     VmmLog_LevelRefresh(H);
     // 7: Set LeechCore MemMap (if exists and not auto - i.e. from file)
-    if(H->cfg.szMemMap[0] && _stricmp(H->cfg.szMemMap, "auto")) {
+    if(H->cfg.szMemMap[0] && !H->cfg.fMemMapAuto) {
         f = (pbMemMap = LocalAlloc(LMEM_ZEROINIT, 0x01000000)) &&
             !fopen_s(&hFile, H->cfg.szMemMap, "rb") && hFile &&
             (cbMemMap = (DWORD)fread(pbMemMap, 1, 0x01000000, hFile)) && (cbMemMap < 0x01000000) &&
@@ -844,18 +900,12 @@ VMM_HANDLE VmmDllCore_Initialize(_In_ DWORD argc, _In_ LPSTR argv[], _Out_opt_ P
     }
     // 9: device context (H->dev) is initialized from here onwards - device functionality is working!
     //    try initialize vmm subsystem.
+    //    If '-memmap auto' is specified it will be initialized here as well.
     if(!VmmProcInitialize(H)) {
         VmmLog(H, MID_CORE, LOGLEVEL_CRITICAL, "Failed to initialize.\n");
         goto fail;
     }
     // 10: vmm context (H->vmm) is initialized from here onwards - vmm functionality is working!
-    //     set LeechCore MemMap (if auto).
-    if(H->cfg.szMemMap[0] && !_stricmp(H->cfg.szMemMap, "auto")) {
-        if(!VmmDllCore_InitializeMemMapAuto(H)) {
-            VmmLog(H, MID_CORE, LOGLEVEL_CRITICAL, "Failed to load initial memory map from: '%s'.\n", H->cfg.szMemMap);
-            goto fail;
-        }
-    }
     // 11: add this vmm instance to the parent vmm instance (if any)
     if(H->cfg.qwParentVmmHandle) {
         if(!VmmDllCore_Initialize_HandleAttachParent(H, (VMM_HANDLE)H->cfg.qwParentVmmHandle)) {
@@ -888,7 +938,10 @@ fail:
     VmmDllCore_CloseHandle(H, FALSE);
     return NULL;
 fail_prelock:
-    LocalFree(H);
+    if(H) {
+        LocalFree(H->cfg.ForensicProcessSkipList.pusz);
+        LocalFree(H);
+    }
     return NULL;
 }
 
@@ -903,7 +956,7 @@ typedef struct tdVMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT {
     DWORD c;
 } VMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT, *PVMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT;
 
-VOID VmmDllCore_MemLeakFindExternal_MapFilterCB(_In_ QWORD k, _In_ POB v, _In_ PVMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT ctx)
+VOID VmmDllCore_MemLeakFindExternal_MapFilterCB(_In_ PVMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT ctx, _In_ QWORD k, _In_ POB v)
 {
     if((v->H != ctx->H) || (ctx->c >= 10)) { return; }
     ctx->c++;
@@ -923,7 +976,7 @@ VOID VmmDllCore_MemLeakFindExternal(_In_ VMM_HANDLE H)
     VMMDLLCORE_MEMLEAKEXTERNAL_CONTEXT ctxFilter = { 0 };
     ctxFilter.H = H;
     if(VmmLogIsActive(H, MID_API, LOGLEVEL_2_WARNING)) {
-        ObMap_Filter(g_VMMDLL_ALLOCMAP_EXT, &ctxFilter, (OB_MAP_FILTER_PFN)VmmDllCore_MemLeakFindExternal_MapFilterCB);
+        ObMap_Filter(g_VMMDLL_ALLOCMAP_EXT, &ctxFilter, (OB_MAP_FILTER_PFN_CB)VmmDllCore_MemLeakFindExternal_MapFilterCB);
     }
 }
 

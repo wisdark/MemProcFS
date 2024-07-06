@@ -12,7 +12,7 @@
 //   functions whilst linux in general should use UTF-8 functions only. This
 //   example use UTF-8 functions throughout to have the best compatibility.
 //
-// (c) Ulf Frisk, 2018-2023
+// (c) Ulf Frisk, 2018-2024
 // Author: Ulf Frisk, pcileech@frizk.net
 //
 
@@ -93,14 +93,14 @@ VOID PrintHexAscii(_In_ PBYTE pb, _In_ DWORD cb)
     LocalFree(sz);
 }
 
-VOID CallbackList_AddFile(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_ ULONG64 cb, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
+VOID CallbackList_AddFile(_Inout_ HANDLE h, _In_ LPCSTR uszName, _In_ ULONG64 cb, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
 {
     if(uszName) {
         printf("         FILE: '%s'\tSize: %lli\n", uszName, cb);
     }
 }
 
-VOID CallbackList_AddDirectory(_Inout_ HANDLE h, _In_ LPSTR uszName, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
+VOID CallbackList_AddDirectory(_Inout_ HANDLE h, _In_ LPCSTR uszName, _In_opt_ PVMMDLL_VFS_FILELIST_EXINFO pExInfo)
 {
     if(uszName) {
         printf("         DIR:  '%s'\n", uszName);
@@ -139,6 +139,40 @@ LPSTR VadMap_Type(_In_ PVMMDLL_MAP_VADENTRY pVad)
     }
 }
 
+
+// ----------------------------------------------------------------------------
+// Callback functions (YARA SEARCH) functionality below:
+// ----------------------------------------------------------------------------
+
+BOOL CallbackSearchYaraMatch(_In_ PVOID pvContext, _In_ PVMMYARA_RULE_MATCH pRuleMatch, _In_reads_bytes_(cbBuffer) PBYTE pbBuffer, _In_ SIZE_T cbBuffer)
+{
+    PVMMDLL_YARA_CONFIG ctx = (PVMMDLL_YARA_CONFIG)pvContext;                   // We pass the PVMMDLL_YARA_CONFIG into the user-set context pointer (ctx->pvUserPtrOpt)
+                                                                                // This is done so we'll get the base address of the buffer being scanned.   
+                                                                                // if one wish to use another user-context the field ctx->pvUserPtrOpt2 may be used.
+    if(pRuleMatch->dwVersion != VMMYARA_RULE_MATCH_VERSION) { return FALSE; }
+    if((pRuleMatch->cStrings > 0) && (pRuleMatch->Strings[0].cMatch > 0)) {     // ensure at least one string match exists - only print the address of the first occurence.
+        printf("         rule: %s  address: %llx  string: %s\n", pRuleMatch->szRuleIdentifier, ctx->vaCurrent + pRuleMatch->Strings[0].cbMatchOffset[0], pRuleMatch->Strings[0].szString);
+    }
+    return TRUE;        // TRUE = continue search, FALSE = abort search
+}
+
+/*
+* Optional filter callback. Tell whether a memory region should be scanned or not.
+* User-mode applications predominantely use vad entries, whilst kernel use pte entries.
+* -- ctx = Pointer to the VMMDLL_YARA_CONFIG structure.
+* -- pePte = Pointer to the VMMDLL_MAP_PTEENTRY structure. NULL if not available.
+* -- peVad = Pointer to the VMMDLL_MAP_VADENTRY structure. NULL if not available.
+* -- return = TRUE to scan the memory region, FALSE to skip it.
+*/
+BOOL CallbackSearchYaraFilter(_In_ PVMMDLL_YARA_CONFIG ctx, _In_opt_ PVMMDLL_MAP_PTEENTRY pePte, _In_opt_ PVMMDLL_MAP_VADENTRY peVad)
+{
+    if(ctx->dwVersion != VMMDLL_YARA_CONFIG_VERSION) { return FALSE; }
+    // only scan VAD-backed image memory regions since we're scanning for PE headers.
+    // this may miss out on PE headers in other memory regions commonly used by malware.
+    return   peVad && peVad->fImage;
+}
+
+
 // ----------------------------------------------------------------------------
 // Main entry point which contains various sample code how to use MemProcFS DLL.
 // Please walk though for different API usage examples. To select device ensure
@@ -153,7 +187,7 @@ int main(_In_ int argc, _In_ char* argv[])
     VMM_HANDLE hVMM = NULL;
     BOOL result;
     NTSTATUS nt;
-    DWORD i, dwPID;
+    DWORD i, cbRead, dwPID;
     DWORD dw = 0;
     QWORD va;
     BYTE pbPage1[0x1000], pbPage2[0x1000];
@@ -164,7 +198,7 @@ int main(_In_ int argc, _In_ char* argv[])
     printf("# Initialize from file:                                     \n");
     ShowKeyPress();
     printf("CALL:    VMMDLL_InitializeFile\n");
-    hVMM = VMMDLL_Initialize(3, (LPSTR[]) { "", "-device", _INITIALIZE_FROM_FILE });
+    hVMM = VMMDLL_Initialize(3, (LPCSTR[]) { "", "-device", _INITIALIZE_FROM_FILE });
     if(hVMM) {
         printf("SUCCESS: VMMDLL_InitializeFile\n");
     } else {
@@ -706,6 +740,100 @@ int main(_In_ int argc, _In_ char* argv[])
             );
         }
         VMMDLL_MemFree(pHeapMap); pHeapMap = NULL;
+    }
+
+
+    // BINARY SEARCH WITH WILDCARD BITMASK for process PE header signatures.
+    // The search is performed at offset 0x0 in each 4096-byte memory page.
+    // Only search virtual memory above 4GB. For more information see vmmdll.h.
+    printf("------------------------------------------------------------\n");
+    printf("# Binary Search for PE header signatures in 'explorer.exe'. \n");
+    ShowKeyPress();
+    // Initialize search context and add one search term. Up to 16 search terms
+    // are possible to use at the same time for more efficient searches.
+    // In addition to the listed configuration it's possible to use callback
+    // functions for both which ranges should be scanned and for search results.
+    // Also additional properties for max address and more exists.
+    VMMDLL_MEM_SEARCH_CONTEXT_SEARCHENTRY SearchEntry3[3] = { 0 };      // an array which may hold up to 3 search terms (max).
+    VMMDLL_MEM_SEARCH_CONTEXT ctxSearch = { 0 };
+    ctxSearch.dwVersion = VMMDLL_MEM_SEARCH_VERSION;            // required struct version.
+    ctxSearch.pSearch = SearchEntry3;                           // required pointer to search terms.
+    if(ctxSearch.cSearch < 3) {
+        ctxSearch.pSearch[ctxSearch.cSearch].cb = 4;            // required number of bytes to search, max 32.
+        memcpy(ctxSearch.pSearch[ctxSearch.cSearch].pb,
+            (BYTE[4]) {
+            0x4d, 0x5a, 0x90, 0x00
+        }, 4);           // required bytes to search for, max 32.
+        memcpy(ctxSearch.pSearch[ctxSearch.cSearch].pbSkipMask,
+            (BYTE[4]) {
+            0x00, 0x00, 0xff, 0x00
+        }, 4);           // optional bitwise wildcard mask, here the 3rd byte is completely optional.
+        ctxSearch.pSearch[ctxSearch.cSearch].cbAlign = 0x1000;  // optional alignment, i.e. search every X bytes,
+                                                                // here we search in beginning of pages only.
+                                                                // other common values are 0/1 (default) - full search
+                                                                // and 8 - search every 8 bytes for 64-bit pointers.
+        ctxSearch.cSearch++;
+    }
+    ctxSearch.ReadFlags = VMMDLL_FLAG_NOCACHE;                  // optional read flags are possible to use.
+    ctxSearch.vaMin = 0x100000000;                              // optional start searching at 4GB in virtual memory
+    // perform the actual search:
+    printf("CALL:    VMMDLL_MemSearch\n");
+    DWORD cvaSearchResult = 0;
+    PQWORD pvaSearchResult = NULL;
+    result = VMMDLL_MemSearch(hVMM, dwPID, &ctxSearch, &pvaSearchResult, &cvaSearchResult);
+    if(result) {
+        printf("SUCCESS: VMMDLL_MemSearch\n");
+        printf("         Number of search results: %u\n", cvaSearchResult);
+        printf("       ");
+        for(i = 0; i < cvaSearchResult; i++) {
+            printf("  0x%016llx", pvaSearchResult[i]);
+        }
+        printf("\n");
+        VMMDLL_MemFree(pvaSearchResult);     // free any function-allocated memory containing results.
+    } else {
+        printf("FAIL:    VMMDLL_MemSearch\n");
+        VMMDLL_MemFree(pvaSearchResult);     // free any function-allocated memory containing results.
+        return 1;
+    }
+
+
+    // YARA SEARCH for process PE header signatures.
+    // NB! YARA SEARCH REQUIRES 'vmmyara.dll'/'vmmyara.so' to be present in the vmm directory.
+    // The search is performed at offset 0x0in each scanned memory region (VAD or PTE).
+    // Only search virtual memory above 4GB. For more information see vmmdll.h.
+    // The search will return a maximum number of 32 results.
+    printf("------------------------------------------------------------\n");
+    printf("# YARA Search for PE header signatures in 'explorer.exe'.   \n");
+    ShowKeyPress();
+    VMMDLL_YARA_CONFIG ctxYara = { 0 };
+    ctxYara.dwVersion = VMMDLL_YARA_CONFIG_VERSION;             // required struct version.
+    // YARA rules: Yara rules may be in the form of any number of strings as
+    // given in the below example.
+    // Yara rules may also be given in the form of one (1) file (including path)
+    // containing one or more YARA rules or index rules.
+    LPSTR szYaraRule1 = " rule mz_header { strings: $mz = \"MZ\" condition: $mz at 0 } ";
+    LPSTR szYaraRules[] = { szYaraRule1 };
+    ctxYara.pszRules = szYaraRules;                             // required YARA rules array.
+    ctxYara.cRules = 1;                                         // required number of YARA rules.
+    ctxYara.pvUserPtrOpt = &ctxYara;                            // optional user pointer passed to callback functions
+                                                                //          here ctxYara is passed since we need to read the base address of the memory region.
+                                                                //          any other user-defined pointer may be set in ctxYara.pvUserPtrOpt2
+    ctxYara.cMaxResult = 16;                                    // optional max number of results to return.
+    ctxYara.ReadFlags = VMMDLL_FLAG_NOCACHE;                    // optional read flags are possible to use.
+    ctxYara.vaMin = 0x100000000;                                // optional start searching at 4GB in virtual memory
+    ctxYara.pfnFilterOptCB = CallbackSearchYaraFilter;          // optional callback function for filtering which memory ranges to scan.
+    ctxYara.pfnScanMemoryCB = CallbackSearchYaraMatch;          // optional callback function for handling search results
+    // perform the actual search:
+    // Note that the the two last arguments works the same as in the VMMDLL_MemSearch() function.
+    // These are not used in this example though since a callback is used instead (it's possible to use both or just one of them).
+    printf("CALL:    VMMDLL_YaraSearch\n");
+    result = VMMDLL_YaraSearch(hVMM, dwPID, &ctxYara, NULL, NULL);
+    if(result) {
+        printf("SUCCESS: VMMDLL_YaraSearch\n");
+        printf("         Number of search results: %u\n", ctxYara.cResult);
+    } else {
+        printf("FAIL:    VMMDLL_YaraSearch\n");
+        // YARA search will fail if 'vmmyara.dll'/'vmmyara.so' is not present in the vmm directory.
     }
 
     
@@ -1348,7 +1476,7 @@ int main(_In_ int argc, _In_ char* argv[])
     // EX.1: CREATE SCATTER HANDLE
     printf("CALL:    VMMDLL_Scatter_Initialize\n");
     hS = VMMDLL_Scatter_Initialize(hVMM, 4, VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_NOPAGING_IO);
-    if(result) {
+    if(hS) {
         printf("SUCCESS: VMMDLL_Scatter_Initialize\n");
     } else {
         printf("FAIL:    VMMDLL_Scatter_Initialize\n");
@@ -1417,6 +1545,46 @@ int main(_In_ int argc, _In_ char* argv[])
         VMMDLL_LOGLEVEL_WARNING,
         "%i fake warning message from %s!", 1, "vmmdll_example");
     printf("SUCCESS: VMMDLL_Log\n");
+
+
+    // Read the file /misc/procinfo/dtb.txt containing the DTBs of processes
+    // in the target system. This virtual file takes a short while to render
+    // after first access.
+    // To make use of the virtual file system it's necessary to enable the
+    // MemProcFS plugins first. This API call is only required once.
+    printf("------------------------------------------------------------\n");
+    printf("# Access /misc/procinfo/dtb.txt                             \n");
+    ShowKeyPress();
+    VMMDLL_InitializePlugins(hVMM);
+    printf("CALL:    VMMDLL_VfsRead\n");
+    ZeroMemory(pbPage1, sizeof(pbPage1));
+    BOOL fResultDTB = FALSE;
+    while(TRUE) {
+        nt = VMMDLL_VfsReadU(hVMM, "\\misc\\procinfo\\progress_percent.txt", pbPage1, 3, &cbRead, 0);
+        if(nt == VMMDLL_STATUS_SUCCESS) {
+            printf("SUCCESS: VMMDLL_VfsRead: %s\n", (LPSTR)pbPage1);
+            if(!strcmp((LPSTR)pbPage1, "100")) {
+                // success - progress is at 100% - read the file.
+                PBYTE pb1M = LocalAlloc(LMEM_ZEROINIT, 0x00100000);
+                if(pb1M) {
+                    nt = VMMDLL_VfsReadU(hVMM, "\\misc\\procinfo\\dtb.txt", pb1M, 0x00100000, &cbRead, 0);
+                    if(nt == VMMDLL_STATUS_SUCCESS) {
+                        printf("SUCCESS: VMMDLL_VfsRead:\n%s\n", (LPSTR)pb1M);
+                    } else {
+                        printf("FAIL:    VMMDLL_VfsRead\n");
+                        return 1;
+                    }
+                    LocalFree(pb1M); pb1M = NULL;
+                }
+                break;
+            }
+            Sleep(100);
+        } else {
+            printf("FAIL:    VMMDLL_VfsRead\n");
+            return 1;
+        }
+    }
+
     
 
 

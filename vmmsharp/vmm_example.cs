@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Runtime.InteropServices;
+using System.Text;
 using vmmsharp;
 
 /*  
@@ -15,7 +16,7 @@ using vmmsharp;
  *  running it from within Visual Studio with breakpoints it should be fairly easy
  *  to follow the calls and have a look at the different return data.
  *  
- *  (c) Ulf Frisk, 2020-2023
+ *  (c) Ulf Frisk, 2020-2024
  *  Author: Ulf Frisk, pcileech@frizk.net
  *  
  */
@@ -61,6 +62,14 @@ class vmm_example
         result = vmm.ConfigGet(Vmm.OPT_CORE_VERBOSE_EXTRA, out ulOptionVV);
         result = vmm.ConfigSet(Vmm.OPT_CORE_VERBOSE_EXTRA, 1);
         result = vmm.ConfigGet(Vmm.OPT_CORE_VERBOSE_EXTRA, out ulOptionVV);
+
+        // Get Memory Map Functionality
+        string memMap = vmm.GetMemoryMap();
+        if (memMap != null)
+        {
+            // Write output to Text File
+            //System.IO.File.WriteAllBytes("mmap.txt", System.Text.Encoding.ASCII.GetBytes(memMap));
+        }
 
         // initialize plugins (required for vfs)
         vmm.InitializePlugins();
@@ -120,6 +129,21 @@ class vmm_example
         // read first 128 bytes of kernel32.dll
         byte[] dataKernel32MZ = vmm.MemRead(dwExplorerPID, mModuleKernel32.vaBase, 128, 0);
 
+        // Read Handle value at kernel32.dll Offset
+        if (vmm.MemReadStruct<IntPtr>(dwExplorerPID, mModuleKernel32.vaBase + 0x100, out var hKernel32))
+        {
+            // Read Success -> Inspect Result
+            hKernel32 = IntPtr.Zero;
+            // Attempt to write modified handle back
+            if (vmm.MemWriteStruct(dwExplorerPID, mModuleKernel32.vaBase + 0x100, hKernel32))
+            {
+                // Successful Write
+            }
+        }
+
+        // Read string: "This program cannot be run in DOS mode" from kernel32.dll with ascii encoding (offset: 0x4e).
+        string strDosMode = vmm.MemReadString(Encoding.ASCII, dwExplorerPID, mModuleKernel32.vaBase + 0x4e, 0x26);
+
         // translate virtual address of 1st page in kernel32.dll to physical address
         ulong paBaseKernel32;
         result = vmm.MemVirt2Phys(dwExplorerPID, mModuleKernel32.vaBase, out paBaseKernel32);
@@ -132,6 +156,9 @@ class vmm_example
             // prepare multiple ranges to read
             scatter.Prepare(mModuleKernel32.vaBase, 0x100);
             scatter.Prepare(mModuleKernel32.vaBase + 0x2000, 0x100);
+            scatter.Prepare(mModuleKernel32.vaBase + 0x3000, (uint)Marshal.SizeOf<IntPtr>());
+            // prepare struct value to write
+            scatter.PrepareWriteStruct<IntPtr>(mModuleKernel32.vaBase, IntPtr.Zero);
             // execute actual read operation to underlying system
             scatter.Execute();
             byte[] pbKernel32_100_1 = scatter.Read(mModuleKernel32.vaBase, 0x80);
@@ -144,6 +171,7 @@ class vmm_example
             scatter.Execute();
             byte[] pbKernel32_100_3 = scatter.Read(mModuleKernel32.vaBase + 0x3000, 0x100);
             byte[] pbKernel32_100_4 = scatter.Read(mModuleKernel32.vaBase + 0x4000, 0x100);
+            scatter.ReadStruct<IntPtr>(mModuleKernel32.vaBase + 0x3000, out IntPtr intPtrResult);
             // clean up scatter handle hS (free native memory)
             // NB! hS handle should not be used after this!
             scatter.Close();
@@ -193,37 +221,37 @@ class vmm_example
     static void ExampleLeechCore()
     {
         bool result;
-        // CREATE LEECHCORE CONTEXT
-        lc.CONFIG cfg = new lc.CONFIG();
-        cfg.dwVersion = lc.CONFIG_VERSION;
-        cfg.dwPrintfVerbosity = lc.CONFIG_PRINTF_ENABLED | lc.CONFIG_PRINTF_V;
-        cfg.szDevice = "file://c:\\dumps\\WIN7-X64-SP1-1.pmem";
-        ulong hLC = lc.Create(ref cfg);
-        if(hLC == 0) { return; }
 
-        // read 128 bytes from address 0x1000
-        byte[] MemRead = lc.Read(hLC, 0x1000, 128);
 
-        // scatter read two memory pages in one single run
-        MEM_SCATTER[] MEMs = lc.ReadScatter(hLC, 0x1000, 0x2000);
+        // CREATE LEECHCORE OBJECT:
+        // It's also possible to create LeechCore objects from an active
+        // MemProcFS Vmm instance with new LeechCore(vmm).
+        LeechCore lc = new LeechCore("file://c:\\dumps\\WIN7-X64-SP1-1.pmem", "", LeechCore.LC_CONFIG_PRINTF_ENABLED | LeechCore.LC_CONFIG_PRINTF_V, 0);
 
-        // get/set LeechCore option
-        ulong qwOptionValue;
-        result = lc.GetOption(hLC, lc.OPT_CORE_VERBOSE_EXTRA, out qwOptionValue);
-        result = lc.SetOption(hLC, lc.OPT_CORE_VERBOSE_EXTRA, 1);
-        result = lc.GetOption(hLC, lc.OPT_CORE_VERBOSE_EXTRA, out qwOptionValue);
 
-        // get memory map via command
-        string strMemMap;
-        byte[] dataMemMap;
-        result = lc.Command(hLC, lc.CMD_MEMMAP_GET, null, out dataMemMap);
-        if (result)
+        // Read 128 bytes from address 0x1000.
+        byte[] MemRead = lc.Read(0x1000, 128);
+
+        // Scatter read two memory pages in one single run.
+        MEM_SCATTER[] MEMs = lc.ReadScatter(0x1000, 0x2000);
+
+        // Get/Set LeechCore option.
+        ulong qwOptionVerboseExtra_Pre, qwOptionVerboseExtra_Post;
+        result = lc.GetOption(LeechCore.LC_OPT_CORE_VERBOSE_EXTRA, out qwOptionVerboseExtra_Pre);
+        result = lc.SetOption(LeechCore.LC_OPT_CORE_VERBOSE_EXTRA, 1);
+        result = lc.GetOption(LeechCore.LC_OPT_CORE_VERBOSE_EXTRA, out qwOptionVerboseExtra_Post);
+
+        // Get memory map:
+        string sMemMap = lc.GetMemMap();
+
+        // Set memory map:
+        if(sMemMap != null)
         {
-            strMemMap = System.Text.Encoding.UTF8.GetString(dataMemMap);
+            lc.SetMemMap(sMemMap);
         }
 
-        // CLOSE
-        lc.Close(hLC);
+        // CLOSE LEECHCORE OBJECT:
+        lc.Close();
     }
 
     static void Main(string[] args)
