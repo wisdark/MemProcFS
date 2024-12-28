@@ -59,7 +59,11 @@
 #define VMM_FLAG_ALTADDR_VA_PTE                 0x00000080  // alternative address mode - MEM_IO_SCATTER_HEADER.qwA contains PTE instead of VA when calling VmmRead* functions.
 #define VMM_FLAG_NOCACHEPUT                     0x00000100  // do not write back to the data cache upon successful read from memory acquisition device.
 #define VMM_FLAG_CACHE_RECENT_ONLY              0x00000200  // only fetch from the most recent active cache region when reading.
-#define VMM_FLAG_FORCECACHE_READ_DISABLE        0x00000400  // disable/override any use of VMM_FLAG_FORCECACHE_READ. only recommended for local files. improves forensic artifact order.
+//#define VMM_FLAG_NO_PREDICTIVE_READ           0x00000400  // (deprecated/unused).
+#define VMM_FLAG_FORCECACHE_READ_DISABLE        0x00000800  // disable/override any use of VMM_FLAG_FORCECACHE_READ. only recommended for local files. improves forensic artifact order.
+#define VMM_FLAG_SCATTER_PREPAREEX_NOMEMZERO    0x00001000  // do not zero out the memory buffer when preparing a scatter read.
+#define VMM_FLAG_NOMEMCALLBACK                  0x00002000  // do not call user-set memory callback functions when reading memory (even if active).
+#define VMM_FLAG_SCATTER_FORCE_PAGEREAD         0x00004000  // force page-sized reads when using scatter functionality.
 #define VMM_FLAG_PAGING_LOOP_PROTECT_BITS       0x00ff0000  // placeholder bits for paging loop protect counter.
 #define VMM_FLAG_NOVAD                          0x01000000  // do not try to retrieve memory from backing VAD even if otherwise possible.
 
@@ -505,6 +509,17 @@ typedef struct tdVMM_MAP_THREADENTRY {
     QWORD vaWin32StartAddress;
 } VMM_MAP_THREADENTRY, *PVMM_MAP_THREADENTRY;
 
+typedef struct tdVMM_MAP_THREADCALLSTACKENTRY {
+    DWORD i;
+    BOOL  fRegPresent;
+    QWORD vaRetAddr;
+    QWORD vaRSP;
+    QWORD vaBaseSP;
+    DWORD cbDisplacement;
+    LPSTR uszModule;
+    LPSTR uszFunction;
+} VMM_MAP_THREADCALLSTACKENTRY, *PVMM_MAP_THREADCALLSTACKENTRY;
+
 typedef enum tdVMM_MAP_HANDLEENTRY_TP_INFOEX {
     HANDLEENTRY_TP_INFO_NONE = 0,
     HANDLEENTRY_TP_INFO_ERROR = 1,
@@ -847,6 +862,18 @@ typedef struct tdVMMOB_MAP_THREAD {
     VMM_MAP_THREADENTRY pMap[];      // map entries.
 } VMMOB_MAP_THREAD, *PVMMOB_MAP_THREAD;
 
+typedef struct tdVMMOB_MAP_THREADCALLSTACK {
+    OB ObHdr;
+    DWORD dwPID;
+    DWORD dwTID;
+    LPSTR uszText;
+    DWORD cbText;
+    DWORD cbMultiText;
+    PBYTE pbMultiText;
+    DWORD cMap;
+    VMM_MAP_THREADCALLSTACKENTRY pMap[0];
+} VMMOB_MAP_THREADCALLSTACK, *PVMMOB_MAP_THREADCALLSTACK;
+
 typedef struct tdVMMOB_MAP_HANDLE {
     OB ObHdr;
     PBYTE pbMultiText;              // UTF-8 multi-string.
@@ -1004,6 +1031,8 @@ typedef struct tdVMMOB_PHYS2VIRT_INFORMATION {
     QWORD pvaList[VMM_PHYS2VIRT_INFORMATION_MAX_PROCESS_RESULT];
 } VMMOB_PHYS2VIRT_INFORMATION, *PVMMOB_PHYS2VIRT_INFORMATION;
 
+#define VMMOB_PROCESS_PERSISTENT_FLAG_THREAD_CALLSTACK_ENABLE       1
+
 // 'static' process information that should be kept even in the ase of a total
 // process refresh. Only use for information that may never change or things
 // that may not affect analysis (like cache preload addresses that only may
@@ -1012,6 +1041,7 @@ typedef struct tdVMMOB_PHYS2VIRT_INFORMATION {
 // thread safe ways. Use with extreme care!
 typedef struct tdVMMOB_PROCESS_PERSISTENT {
     OB ObHdr;
+    SRWLOCK LockUpdateSRW;  // update lock (exclusive)
     QWORD paDTB_Override;   // optional saved override of the paDTB (set by user).
     BOOL fIsPostProcessingComplete;
     POB_CONTAINER pObCMapVadPrefetch;
@@ -1029,6 +1059,7 @@ typedef struct tdVMMOB_PROCESS_PERSISTENT {
     struct {
         QWORD vaVirt2Phys;
         QWORD paPhys2Virt;
+        QWORD flags;
     } Plugin;
 } VMMOB_PROCESS_PERSISTENT, *PVMMOB_PROCESS_PERSISTENT;
 
@@ -1094,7 +1125,7 @@ typedef struct tdVMMOB_PROCESS_TABLE {
 #define VMM_CACHE_REGIONS               3
 #define VMM_CACHE_REGION_MEMS_INITALLOC FALSE
 #define VMM_CACHE_REGION_MEMS_PHYS      0x5000
-#define VMM_CACHE_REGION_MEMS_TLB       0x3000
+#define VMM_CACHE_REGION_MEMS_TLB       0x5000
 #define VMM_CACHE_REGION_MEMS_PAGING    0x2000
 #define VMM_CACHE_BUCKETS               0x5000
 
@@ -1311,6 +1342,7 @@ typedef struct tdVMM_OFFSET_EPROCESS {
         WORD TOKEN_IntegrityLevelIndex;
         WORD KernelTime;
         WORD UserTime;
+        WORD SectionBaseAddress;
     } opt;
 } VMM_OFFSET_EPROCESS, *PVMM_OFFSET_EPROCESS;
 
@@ -1353,10 +1385,19 @@ typedef struct tdVMM_OFFSET_FILE {
     struct {
         WORD cb;
         WORD oDeviceObject;
+        WORD oFsContext;
         WORD oSectionObjectPointer;
         WORD oFileName;
         WORD oFileNameBuffer;
     } _FILE_OBJECT;
+    struct {
+        WORD cb;
+        WORD oVersion;
+        WORD oResource;
+        WORD oAllocationSize;
+        WORD oFileSize;
+        WORD oValidDataLength;
+    } _FSRTL_COMMON_FCB_HEADER;
     struct {
         WORD cb;
         WORD oDataSectionObject;
@@ -1384,8 +1425,14 @@ typedef struct tdVMM_OFFSET_FILE {
     } _CONTROL_AREA;
     struct {
         WORD cb;
+        WORD oImageFileSize;
+    } _SECTION_IMAGE_INFORMATION;
+    struct {
+        WORD cb;
         WORD oControlArea;
+        WORD oSegmentFlags;
         WORD oSizeOfSegment;
+        WORD oU2;
         WORD oPrototypePte;
     } _SEGMENT;
     struct {
@@ -1528,6 +1575,9 @@ typedef struct tdVMM_DYNAMIC_LOAD_FUNCTIONS {
     VMMFN_RtlDecompressBufferEx *RtlDecompressBufferExOpt; // ntdll.dll!RtlDecompressBufferEx
 } VMM_DYNAMIC_LOAD_FUNCTIONS;
 
+// MEM callback function definition.
+typedef VOID(*VMM_MEM_CALLBACK_PFN)(_In_opt_ PVOID ctxUser, _In_ DWORD dwPID, _In_ DWORD cpMEMs, _In_ PPMEM_SCATTER ppMEMs);
+
 // forward declarations of non-public types:
 typedef struct tdVMMWORK_CONTEXT            *PVMMWORK_CONTEXT;
 typedef struct tdFC_CONTEXT                 *PFC_CONTEXT;
@@ -1600,6 +1650,7 @@ typedef struct tdVMM_CONTEXT {
         SRWLOCK ModuleMiscWeb;
         SRWLOCK WinObjDisplay;
         SRWLOCK PluginMgr;
+        SRWLOCK ThreadCallback;
     } LockSRW;
     POB_CONTAINER pObCMapPhysMem;
     POB_CONTAINER pObCMapEvil;
@@ -1621,6 +1672,7 @@ typedef struct tdVMM_CONTEXT {
     POB_CACHEMAP pObCacheMapHeapAlloc;
     POB_CACHEMAP pObCacheMapWinObjDisplay;
     POB_CACHEMAP pObCacheMapObCompressedShared;
+    POB_MAP pmObThreadCallback;
     // page caches
     struct {
         VMM_CACHE_TABLE PHYS;
@@ -1629,8 +1681,22 @@ typedef struct tdVMM_CONTEXT {
         POB_SET PAGING_FAILED;
         POB_MAP pmPrototypePte;     // map with mm_vad.c managed data
     } Cache;
-    WCHAR _EmptyWCHAR;
     VMMWIN_OBJECT_TYPE_TABLE ObjectTypeTable;
+    // memory access callback functionality:
+    struct {
+        PVOID ctxReadPhysicalPre;
+        PVOID ctxReadPhysicalPost;
+        PVOID ctxWritePhysicalPre;
+        PVOID ctxReadVirtualPre;
+        PVOID ctxReadVirtualPost;
+        PVOID ctxWriteVirtualPre;
+        VMM_MEM_CALLBACK_PFN pfnReadPhysicalPreCB;
+        VMM_MEM_CALLBACK_PFN pfnReadPhysicalPostCB;
+        VMM_MEM_CALLBACK_PFN pfnWritePhysicalPreCB;
+        VMM_MEM_CALLBACK_PFN pfnReadVirtualPreCB;
+        VMM_MEM_CALLBACK_PFN pfnReadVirtualPostCB;
+        VMM_MEM_CALLBACK_PFN pfnWriteVirtualPreCB;
+    } MemUserCB;
 } VMM_CONTEXT, *PVMM_CONTEXT;
 
 #define VMM_HANDLE_VM_CHILD_MAX_COUNT           32
@@ -1672,6 +1738,8 @@ typedef struct tdVMM_HANDLE {
     PFC_CONTEXT fc;
     // vmm core:
     VMM_CONTEXT vmm;
+    // utils:
+    BYTE ZERO_PAGE[0x1000];
 } *VMM_HANDLE;
 
 
@@ -2112,6 +2180,105 @@ BOOL VmmSearch(_In_ VMM_HANDLE H, _In_opt_ PVMM_PROCESS pProcess, _Inout_ PVMM_M
 
 
 // ----------------------------------------------------------------------------
+// SCATTER READ MEMORY FUNCTIONALITY BELOW:
+// The scatter functionality is not thread-safe by itself and should only be
+// used in single-threaded contexts or with proper synchronization.
+// ----------------------------------------------------------------------------
+
+typedef struct tdVMMOB_SCATTER *PVMMOB_SCATTER;
+
+/*
+* Initialize a scatter handle which is used to call VmmScatter* functions.
+* CALLER DECREF: return
+* -- H
+* -- flags = flags as in VMM_FLAG_*
+* -- return = handle to be used in VmmScatter_* functions.
+*/
+_Success_(return != NULL)
+PVMMOB_SCATTER VmmScatter_Initialize(_In_ VMM_HANDLE H, _In_ DWORD flags);
+
+/*
+* Prepare (add) a memory range for reading. The buffer pb and the read length
+* *pcbRead will be populated when VmmScatter_Execute() is later called.
+* NB! the buffer pb must not be deallocated when VmmScatter_Execute() is called.
+* -- hS
+* -- va = start address of the memory range to read.
+* -- cb = size of memory range to read.
+* -- pb = buffer to populate with read memory when calling VmmScatter_Execute()
+* -- pcbRead = optional pointer to be populated with number of bytes successfully read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_PrepareEx(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb, _Out_writes_opt_(cb) PBYTE pb, _Out_opt_ PDWORD pcbRead);
+
+/*
+* Prepare (add) a memory range for reading. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- va = start address of the memory range to read.
+* -- cb = size of memory range to read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb);
+
+/*
+* Prepare (add) multiple memory ranges. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- psva = set with addresses to read.
+* -- cb = size of memory range to read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare3(_In_ PVMMOB_SCATTER hS, _In_opt_ POB_SET psva, _In_ DWORD cb);
+
+/*
+* Prepare (add) multiple memory ranges. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- pm = map of objects.
+* -- cb = size of memory range to read.
+* -- pfnFilterCB = filter as required by ObMap_FilterSet function.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare5(_In_ PVMMOB_SCATTER hS, _In_opt_ POB_MAP pm, _In_ DWORD cb, _In_ OB_MAP_FILTERSET_PFN_CB pfnFilterCB);
+
+/*
+* Retrieve the memory ranges previously populated with calls to the
+* VmmScatter_Prepare* functions.
+* -- hS
+* -- pProcess = the process to read from, NULL = physical memory.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Execute(_In_ PVMMOB_SCATTER hS, _In_ PVMM_PROCESS pProcess);
+
+/*
+* Read out memory in previously populated ranges. This function should only be
+* called after the memory has been retrieved using VmmScatter_Execute().
+* -- hS
+* -- va
+* -- cb
+* -- pb
+* -- pcbRead
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Read(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb, _Out_writes_opt_(cb) PBYTE pb, _Out_opt_ PDWORD pcbRead);
+
+/*
+* Clear/Reset the handle for use in another subsequent read scatter operation.
+* -- hS = the scatter handle to clear for reuse.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Clear(_In_ PVMMOB_SCATTER hS);
+
+
+
+// ----------------------------------------------------------------------------
 // WORK related function definitions below:
 // ----------------------------------------------------------------------------
 
@@ -2300,6 +2467,7 @@ PVMM_PROCESS VmmProcessClone(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess);
 * Create a new process object. New process object are created in a separate
 * data structure and won't become visible to the "Process" functions until
 * after the VmmProcessCreateFinish have been called.
+* NB! REQUIRE SINGLE THREAD: [H->vmm.LockMaster]
 * CALLER DECREF: return
 * -- H
 * -- fTotalRefresh = create a completely new entry - i.e. do not copy any form
@@ -2316,6 +2484,22 @@ PVMM_PROCESS VmmProcessClone(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess);
 * -- return
 */
 PVMM_PROCESS VmmProcessCreateEntry(_In_ VMM_HANDLE H, _In_ BOOL fTotalRefresh, _In_ DWORD dwPID, _In_ DWORD dwPPID, _In_ DWORD dwState, _In_ QWORD paDTB, _In_ QWORD paDTB_UserOpt, _In_ CHAR szName[16], _In_ BOOL fUserOnly, _In_reads_opt_(cbEPROCESS) PBYTE pbEPROCESS, _In_ DWORD cbEPROCESS);
+
+/*
+* Create a new "fake" terminated process entry. This is useful when terminated
+* processes are not available in the system but can be discovered by other means.
+* NB! REQUIRE SINGLE THREAD: [H->vmm.LockMaster]
+* -- H
+* -- dwPID
+* -- dwPPID
+* -- ftCreate
+* -- ftExit
+* -- szShortName
+* -- uszLongName
+* -- return
+*/
+_Success_(return)
+BOOL VmmProcessCreateTerminatedFakeEntry(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ DWORD dwPPID, _In_ QWORD ftCreate, _In_ QWORD ftExit, _In_reads_(15) LPSTR szShortName, _In_ LPSTR uszLongName);
 
 /*
 * Query process for its creation time.
@@ -2641,6 +2825,7 @@ PVMM_MAP_HEAPENTRY VmmMap_GetHeapEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_HEAP p
 * CALLER DECREF: ppObHeapAllocMap
 * -- H
 * -- pProcess
+* -- vaHeap = va of heap or heap id.
 * -- ppObHeapAllocMap
 * -- return
 */
@@ -2674,6 +2859,23 @@ BOOL VmmMap_GetThread(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Out_ PVMMO
 * -- return = PTR to VMM_MAP_THREADENTRY or NULL on fail. Must not be used out of pThreadMap scope.
 */
 PVMM_MAP_THREADENTRY VmmMap_GetThreadEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_THREAD pThreadMap, _In_ DWORD dwTID);
+
+/*
+* Retrieve the callstack for the specified thread. Callstack parsing is:
+* - only supported for x64 user-mode threads.
+* - best-effort and is very resource intense since it may
+* - may download a large amounts of PDB symbol data from the Microsoft symbol server.
+* Use with caution!
+* CALLER DECREF: *ppObThreadCallstackMap
+* -- H
+* -- pProcess
+* -- pThread
+* -- flags = VMM_FLAG_NOCACHE (do not use cache)
+* -- ppObThreadCallstackMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetThreadCallstack(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_THREADENTRY pThread, _In_ DWORD flags, _Out_ PVMMOB_MAP_THREADCALLSTACK *ppObThreadCallstackMap);
 
 /*
 * Retrieve the HANDLE map

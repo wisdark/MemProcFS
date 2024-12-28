@@ -15,6 +15,8 @@
 // Prefetch map generation functionality:
 //------------------------------------------------------------------------------
 
+static LPSTR MFCPREFETCH_CSV = "Process,RunCount,FileCount,PrefetchFile,RunTime1,RunTime2,RunTime3,RunTime4,RunTime5,RunTime6,RunTime7,RunTim8,FileObjectAddress\n";
+
 #define MFCPREFETCH_MAXSIZE             0x00100000  // 1MB
 #define MFCPREFETCH_COMPRESSED_MAGIC    0x044D414D  // MAM
 #define MFCPREFETCH_MAGIC               0x41434353  // SCCA
@@ -166,7 +168,7 @@ VOID MFcPrefetch_ParseSingle(_In_ VMM_HANDLE H, _In_ PMFCPREFETCH_INIT_CONTEXT c
     cch = (DWORD)strlen(pFile->uszName);
     if((cch < 12) || (pFile->uszName[cch - 12] != '-')) { return; }
     // 2: read file and decompress if needed:
-    cbFile = VmmWinObjFile_Read(H, pFile, 0, ctx->pbBuffer1M_1, (DWORD)min(MFCPREFETCH_MAXSIZE, pFile->cb), 0);
+    cbFile = VmmWinObjFile_Read(H, pFile, 0, ctx->pbBuffer1M_1, (DWORD)min(MFCPREFETCH_MAXSIZE, pFile->cb), 0, VMMWINOBJ_FILE_TP_DEFAULT);
     if(cbFile < 0x100) { return; }
     dwSignature = *(PDWORD)ctx->pbBuffer1M_1;
     if(dwSignature == MFCPREFETCH_COMPRESSED_MAGIC) {
@@ -368,7 +370,7 @@ NTSTATUS MFcPrefetch_Read(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _
     if(CharUtil_StrEndsWith(ctxP->uszPath, ".pf", TRUE)) {
         cbFile = pObPfMap->pMap[idx].cbPrefetchFileSize;
         if((pbFile = LocalAlloc(LMEM_ZEROINIT, cbFile))) {
-            VmmWinObjFile_ReadFromObjectAddress(H, pObPfMap->pMap[idx].vaPrefetchFile, 0, pbFile, cbFile, 0);
+            VmmWinObjFile_ReadFromObjectAddress(H, pObPfMap->pMap[idx].vaPrefetchFile, 0, pbFile, cbFile, 0, VMMWINOBJ_FILE_TP_DEFAULT);
             nt = Util_VfsReadFile_FromPBYTE(pbFile, cbFile, pb, cb, pcbRead, cbOffset);
             LocalFree(pbFile); pbFile = NULL;
             goto finish;
@@ -461,12 +463,42 @@ VOID MFcPrefetch_FcTimeline(
                 }
             }
         }
+        Ob_DECREF(pObPfMap);
     }
-    Ob_DECREF(pObPfMap);
+}
+
+VOID MFcPrefetch_FcLogCSV(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_CONTEXT ctxP, _In_ VMMDLL_CSV_HANDLE hCSV)
+{
+    DWORD i;
+    PVMM_MAP_PREFETCHENTRY pe;
+    PVMMOB_MAP_PREFETCH pObPfMap = NULL;
+    if(!ctxP->pProcess && ctxP->ctxM && (pObPfMap = MFcPrefetch_GetMap(H, (POB_CONTAINER)ctxP->ctxM))) {
+        for(i = 0; i < pObPfMap->cMap; i++) {
+            pe = &pObPfMap->pMap[i];
+            FcCsv_Reset(hCSV);
+            FcFileAppend(H, "prefetch.csv", "%s,%u,%u,%s,%s,%s,%s,%s,%s,%s,%s,%s,%llx\n",
+                pe->uszExecutableFileName,
+                pe->cRunCount,
+                pe->cFileMetrics,
+                pe->uszPrefetchFileName,
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[0]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[1]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[2]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[3]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[4]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[5]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[6]),
+                FcCsv_FileTime(hCSV, pe->ftRunTimes[7]),
+                pe->vaPrefetchFile
+            );
+        }
+        Ob_DECREF(pObPfMap);
+    }
 }
 
 PVOID MFcPrefetch_FcInitialize(_In_ VMM_HANDLE H, _In_ PVMMDLL_PLUGIN_CONTEXT ctxP)
 {
+    FcFileAppend(H, "prefetch.csv", MFCPREFETCH_CSV);
     return ctxP->ctxM;
 }
 
@@ -498,6 +530,7 @@ VOID M_FcPrefetch_Initialize(_In_ VMM_HANDLE H, _Inout_ PVMMDLL_PLUGIN_REGINFO p
     pRI->reg_fnfc.pfnInitialize = MFcPrefetch_FcInitialize;
     pRI->reg_fnfc.pfnTimeline = MFcPrefetch_FcTimeline;                         // Forensic timelining supported
     pRI->reg_fnfc.pfnLogJSON = MFcPrefetch_FcLogJSON;                           // JSON log function supported
+    pRI->reg_fnfc.pfnLogCSV = MFcPrefetch_FcLogCSV;                             // CSV log function supported
     memcpy(pRI->reg_info.sTimelineNameShort, "PREF", 5);
     strncpy_s(pRI->reg_info.uszTimelineFile, 32, "timeline_prefetch", _TRUNCATE);
     pRI->pfnPluginManager_Register(H, pRI);

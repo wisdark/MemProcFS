@@ -1,4 +1,4 @@
-// vmmdll_scatter.c : implementation of the exported VMMDDLL_Scatter_* functions.
+// vmmdll_scatter.c : implementation of the exported VMMDLL_Scatter_* functions.
 // 
 // This API is a wrapper API around the VMMDLL_MemReadScatter API call.
 //
@@ -72,6 +72,7 @@ BOOL VMMDLL_Scatter_PrepareInternal(_In_ PSCATTER_CONTEXT ctx, _In_ QWORD va, _I
     PMEM_SCATTER pMEM;
     PSCATTER_RANGE pr = NULL;
     DWORD i, iNewMEM = 0, cMEMsRequired, cMEMsPre = 0;
+    BOOL fForcePageRead = ctx->dwReadFlags & VMMDLL_FLAG_SCATTER_FORCE_PAGEREAD;
     // zero out any buffer received
     if(pb && !(ctx->dwReadFlags & VMMDLL_FLAG_SCATTER_PREPAREEX_NOMEMZERO)) {
         ZeroMemory(pb, cb);
@@ -127,7 +128,7 @@ BOOL VMMDLL_Scatter_PrepareInternal(_In_ PSCATTER_CONTEXT ctx, _In_ QWORD va, _I
             pMEM = pr->MEMs + iNewMEM;
             iNewMEM++;
             pMEM->qwA = vaMEM;
-            if((cMEMsRequired == 1) && (cb <= 0x400)) {
+            if((cMEMsRequired == 1) && (cb <= 0x400) && !fForcePageRead) {
                 // single-page small read -> optimize MEM for small read.
                 // NB! buffer allocation still remains 0x1000 even if not all is used for now.
                 pMEM->cb = (cb + 15) & ~0x7;
@@ -448,7 +449,7 @@ BOOL VMMDLL_Scatter_ExecuteReadInternal(_In_ PSCATTER_CONTEXT ctx)
     if(ctx->HVM) {
         VMMDLL_VmMemReadScatter(ctx->H, ctx->HVM, ppMEMs, ctx->cPageTotal, 0);
     } else {
-        VMMDLL_MemReadScatter(ctx->H, ctx->dwPID, ppMEMs, ctx->cPageTotal, ctx->dwReadFlags | VMMDLL_FLAG_NO_PREDICTIVE_READ);
+        VMMDLL_MemReadScatter(ctx->H, ctx->dwPID, ppMEMs, ctx->cPageTotal, ctx->dwReadFlags);
     }
     ctx->fExecute = TRUE;
     // range fixup (if required)

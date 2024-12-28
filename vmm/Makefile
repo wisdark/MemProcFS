@@ -29,8 +29,8 @@ OBJ = oscompatibility.o charutil.o util.o pe.o vmmdll.o vmmdll_core.o        \
 	  ob/ob_memfile.o ob/ob_set.o ob/ob_strmap.o                             \
 	  statistics.o sysquery.o vmmheap.o vmmlog.o vmmnet.o                    \
 	  vmmproc.o vmmvm.o vmmwininit.o vmmwin.o vmmwinobj.o vmmwinpool.o       \
-	  vmmwinreg.o vmmwinsvc.o vmmuserconfig.o vmmwork.o vmmyarautil.o        \
-	  vmmyarawrap.o                                                          \
+	  vmmwinreg.o vmmwinsvc.o vmmwinthread.o vmmuserconfig.o vmmwork.o       \
+	  vmmyarautil.o vmmyarawrap.o                                            \
 	  modules/m_vfsroot.o modules/m_vfsproc.o modules/m_vfsfc.o              \
 	  modules/m_conf.o modules/m_vm.o modules/m_winreg.o                     \
 	  modules/m_fc_csv.o modules/m_fc_file.o modules/m_fc_findevil.o         \
@@ -48,11 +48,12 @@ OBJ = oscompatibility.o charutil.o util.o pe.o vmmdll.o vmmdll_core.o        \
 	  modules/m_sys_proc.o modules/m_sys_svc.o modules/m_sys_syscall.o       \
 	  modules/m_sys_sysinfo.o modules/m_sys_task.o modules/m_sys_user.o      \
 	  modules/m_phys2virt.o modules/m_search.o modules/m_searchyara.o        \
-	  modules/m_proc_file_handles_vads.o modules/m_proc_file_modules.o       \
-	  modules/m_proc_handle.o modules/m_proc_heap.o                          \
-	  modules/m_proc_ldrmodules.o modules/m_proc_memmap.o                    \
-	  modules/m_proc_minidump.o modules/m_proc_thread.o                      \
-	  modules/m_proc_token.o modules/m_proc_virt2phys.o
+	  modules/m_proc_console.o modules/m_proc_file_handles_vads.o            \
+	  modules/m_proc_file_modules.o modules/m_proc_handle.o                  \
+	  modules/m_proc_heap.o modules/m_proc_ldrmodules.o                      \
+	  modules/m_proc_memmap.o modules/m_proc_minidump.o                      \
+	  modules/m_proc_thread.o modules/m_proc_token.o                         \
+	  modules/m_proc_virt2phys.o
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)

@@ -728,7 +728,8 @@ typedef struct _PEB32 {
     BYTE Reserved1[2];
     BYTE BeingDebugged;
     BYTE Reserved2[1];
-    DWORD Reserved3[2];
+    DWORD Mutant;
+    DWORD ImageBaseAddress;
     DWORD Ldr;
     DWORD ProcessParameters;
     DWORD SubSystemData;
@@ -745,7 +746,8 @@ typedef struct _PEB64 {
     BYTE BeingDebugged;
     BYTE Reserved2[1];
     DWORD _Filler;
-    QWORD Reserved3[2];
+    QWORD Mutant;
+    QWORD ImageBaseAddress;
     QWORD Ldr;
     QWORD ProcessParameters;
     QWORD SubSystemData;
@@ -863,6 +865,25 @@ static LPCSTR FILE_DEVICE_STR[] = {
     "FILE_DEVICE_EVENT_COLLECTOR",
     "FILE_DEVICE_USB4",
     "FILE_DEVICE_SOUNDWIRE"
+};
+
+static LPCSTR SE_SIGNING_LEVEL_STR[] = {
+    "UNCHECKED",
+    "UNSIGNED",
+    "ENTERPRISE",
+    "DEVELOPER",
+    "AUTHENTICODE",
+    "CUSTOM_2",
+    "STORE",
+    "ANTIMALWARE",
+    "MICROSOFT",
+    "CUSTOM_4",
+    "CUSTOM_5",
+    "DYNAMIC_CODEGEN",
+    "WINDOWS",
+    "CUSTOM_7",
+    "WINDOWS_TCB",
+    "CUSTOM_6",
 };
 
 #endif /* __VMMWINDEF_H__ */

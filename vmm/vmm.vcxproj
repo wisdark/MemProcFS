@@ -168,7 +168,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -194,7 +194,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
@@ -220,7 +220,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -253,7 +253,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -286,7 +286,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
@@ -318,7 +318,7 @@
 </Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>copy $(ProjectDir)\vmmdll.h $(SolutionDir)\includes\ /y</Command>
+      <Command>copy "$(ProjectDir)\vmmdll.h" "$(SolutionDir)\includes\" /y</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -364,6 +364,7 @@
     <ClInclude Include="vmmwinpool.h" />
     <ClInclude Include="vmmwinreg.h" />
     <ClInclude Include="vmmwinsvc.h" />
+    <ClInclude Include="vmmwinthread.h" />
     <ClInclude Include="vmmwork.h" />
     <ClInclude Include="vmmyarautil.h" />
   </ItemGroup>
@@ -410,6 +411,7 @@
     <ClCompile Include="modules\m_misc_procinfo.c" />
     <ClCompile Include="modules\m_misc_view.c" />
     <ClCompile Include="modules\m_phys2virt.c" />
+    <ClCompile Include="modules\m_proc_console.c" />
     <ClCompile Include="modules\m_proc_file_handles_vads.c" />
     <ClCompile Include="modules\m_proc_file_modules.c" />
     <ClCompile Include="modules\m_proc_handle.c" />
@@ -474,6 +476,7 @@
     <ClCompile Include="vmmwinpool.c" />
     <ClCompile Include="vmmwinreg.c" />
     <ClCompile Include="vmmwinsvc.c" />
+    <ClCompile Include="vmmwinthread.c" />
     <ClCompile Include="vmmwork.c" />
     <ClCompile Include="vmmyarautil.c" />
     <ClCompile Include="vmmyarawrap.c" />

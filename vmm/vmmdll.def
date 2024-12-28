@@ -31,6 +31,7 @@ EXPORTS
     VMMDLL_UtilVfsWriteFile_BOOL
     VMMDLL_UtilVfsWriteFile_DWORD
     
+    VMMDLL_MemCallback
     VMMDLL_MemPrefetchPages
     VMMDLL_MemRead
     VMMDLL_MemReadEx
@@ -54,11 +55,18 @@ EXPORTS
     
     VMMDLL_PidList
     VMMDLL_PidGetFromName
+
     VMMDLL_Map_GetNetU
     VMMDLL_Map_GetNetW
     VMMDLL_Map_GetPfn
     VMMDLL_Map_GetPfnEx
     VMMDLL_Map_GetPool
+    VMMDLL_Map_GetKObjectU
+    VMMDLL_Map_GetKObjectW
+    VMMDLL_Map_GetKDriverU
+    VMMDLL_Map_GetKDriverW
+    VMMDLL_Map_GetKDeviceU
+    VMMDLL_Map_GetKDeviceW
     VMMDLL_Map_GetPhysMem
     VMMDLL_Map_GetUsersU
     VMMDLL_Map_GetUsersW
@@ -84,6 +92,8 @@ EXPORTS
     VMMDLL_Map_GetHeap
     VMMDLL_Map_GetHeapAlloc
     VMMDLL_Map_GetThread
+    VMMDLL_Map_GetThread_CallstackU
+    VMMDLL_Map_GetThread_CallstackW
     VMMDLL_Map_GetHandleU
     VMMDLL_Map_GetHandleW
     VMMDLL_ProcessGetInformation

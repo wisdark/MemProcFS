@@ -116,6 +116,7 @@ BOOL VmmHeap_GetEntryDecoded(_In_ BOOL f32, _In_ QWORD qwHeapEncoding, _In_ PBYT
     } u;
     if(!f32) { o += 8; }
     u.v = *(PQWORD)(pb + o);
+    if(!u.v) { return FALSE; }
     if(qwHeapEncoding) {
         u.v ^= qwHeapEncoding;
         if(u.pbH[3] != (u.pbH[0] ^ u.pbH[1] ^ u.pbH[2])) { return FALSE; }
@@ -737,6 +738,12 @@ VOID VmmHeapAlloc_NtInitSeg(_In_ VMM_HANDLE H, _In_ PVMMHEAPNT_CTX ctx, _In_ QWO
     while(oEntry < cbSegment - 0x10) {
         vaChunk = vaSegment + oEntry;
         if(!VmmHeap_GetEntryDecoded(ctx->f32, ctx->qwHeapEncoding, pbSegment, oEntry, &eH)) {
+            if(!(vaChunk & 0xfff) && (oEntry + 0x1000 < cbSegment) && !memcmp(pbSegment + oEntry, H->ZERO_PAGE, 0x1000)) {
+                // pages may be zeroed out -> skip to next page.
+                dwPreviousSize = 0;
+                oEntry += 0x1000;
+                continue;
+            }
             VmmLog(H, MID_HEAP, LOGLEVEL_6_TRACE, "FAIL: (CHECKSUM) AT: %llx %x", vaSegment, oEntry);
             break;
         }
@@ -1291,7 +1298,10 @@ int VmmHeap_qsort_SegmentEntry(PVMM_MAP_HEAP_SEGMENTENTRY p1, PVMM_MAP_HEAP_SEGM
 
 int VmmHeap_qsort_HeapEntry(PVMM_MAP_HEAPENTRY p1, PVMM_MAP_HEAPENTRY p2)
 {
-    return (p1->va < p2->va) ? -1 : ((p1->va > p2->va) ? 1 : 0);
+    if(p1->dwHeapNum == p2->dwHeapNum) {
+        return (p1->va < p2->va) ? -1 : ((p1->va > p2->va) ? 1 : 0);
+    }
+    return (p1->dwHeapNum < p2->dwHeapNum) ? -1 : ((p1->dwHeapNum > p2->dwHeapNum) ? 1 : 0);
 }
 
 /*

@@ -17,6 +17,7 @@
 #include "vmmwinpool.h"
 #include "vmmwinreg.h"
 #include "vmmwinsvc.h"
+#include "vmmwinthread.h"
 #include "vmmnet.h"
 #include "pluginmanager.h"
 #include "charutil.h"
@@ -562,19 +563,21 @@ BOOL VmmTlbPageTableVerify(_In_ VMM_HANDLE H, _Inout_ PBYTE pb, _In_ QWORD pa, _
 VOID VmmTlbPrefetch(_In_ VMM_HANDLE H, _In_ POB_SET pTlbPrefetch)
 {
     QWORD pbTlb = 0;
-    DWORD cTlbs, i = 0;
+    DWORD cTlbs, cTlbsMax, i = 0;
     PPVMMOB_CACHE_MEM ppObMEMs = NULL;
     PPMEM_SCATTER ppMEMs = NULL;
-    if(!(cTlbs = min(0x2000, ObSet_Size(pTlbPrefetch)))) { goto fail; }
+    cTlbsMax = VMM_CACHE_REGION_MEMS_TLB >> 1;
+    if(!(cTlbs = min(cTlbsMax, ObSet_Size(pTlbPrefetch)))) { goto fail; }
     if(!(ppMEMs = LocalAlloc(0, cTlbs * sizeof(PMEM_SCATTER)))) { goto fail; }
     if(!(ppObMEMs = LocalAlloc(0, cTlbs * sizeof(PVMMOB_CACHE_MEM)))) { goto fail; }
-    while((cTlbs = min(0x2000, ObSet_Size(pTlbPrefetch)))) {   // protect cache bleed -> max 0x2000 pages/round
+    while((cTlbs = min(cTlbsMax, ObSet_Size(pTlbPrefetch)))) {   // protect cache bleed -> max cTlbsMax pages/round
         for(i = 0; i < cTlbs; i++) {
             if((ppObMEMs[i] = VmmCacheReserve(H, VMM_CACHE_TAG_TLB))) {
                 ppMEMs[i] = &ppObMEMs[i]->h;
                 ppMEMs[i]->qwA = ObSet_Pop(pTlbPrefetch);
             } else {
                 cTlbs = i;
+                break;
             }
         }
         LcReadScatter(H->hLC, cTlbs, ppMEMs);
@@ -1169,6 +1172,65 @@ fail:
 }
 
 /*
+* Create a new "fake" terminated process entry. This is useful when terminated
+* processes are not available in the system but can be discovered by other means.
+* -- H
+* -- dwPID
+* -- dwPPID
+* -- ftCreate
+* -- ftExit
+* -- szShortName
+* -- uszLongName
+* -- return
+*/
+_Success_(return)
+BOOL VmmProcessCreateTerminatedFakeEntry(_In_ VMM_HANDLE H, _In_ DWORD dwPID, _In_ DWORD dwPPID, _In_ QWORD ftCreate, _In_ QWORD ftExit, _In_reads_(15) LPSTR szShortName, _In_ LPSTR uszLongName)
+{
+    PVMM_PROCESS pTProc = NULL;
+    PVMMOB_PROCESS_PERSISTENT pProcPers = NULL;
+    PVMMOB_PROCESS_TABLE ptOld = NULL, ptNew = NULL;
+    BYTE pbE[0x1000] = { 0 };
+    if(!H->vmm.offset.EPROCESS.opt.CreateTime || !H->vmm.offset.EPROCESS.opt.ExitTime) { return FALSE; }
+    if(!dwPID || !dwPPID || !ftCreate || !ftExit || !szShortName || !uszLongName || !szShortName[0] || !uszLongName[0]) { return FALSE; }
+    // 1: Fake EPROCESS:
+    *(PBYTE)(pbE + H->vmm.offset.EPROCESS.State) = 0xff;
+    *(PDWORD)(pbE + H->vmm.offset.EPROCESS.PID) = dwPID;
+    *(PDWORD)(pbE + H->vmm.offset.EPROCESS.PPID) = dwPPID;
+    *(PQWORD)(pbE + H->vmm.offset.EPROCESS.opt.CreateTime) = ftCreate;
+    *(PQWORD)(pbE + H->vmm.offset.EPROCESS.opt.ExitTime) = ftExit;
+    memcpy(pbE + H->vmm.offset.EPROCESS.Name, szShortName, 15);
+    // 2: Allocate new 'Process Table' (if not already existing) and copy over all existing processes:
+    ptOld = (PVMMOB_PROCESS_TABLE)ObContainer_GetOb(H->vmm.pObCPROC);
+    if(!ptOld) { return FALSE; }
+    ptNew = (PVMMOB_PROCESS_TABLE)ObContainer_GetOb(ptOld->pObCNewPROC);
+    if(!ptNew) {
+        ptNew = (PVMMOB_PROCESS_TABLE)Ob_AllocEx(H, OB_TAG_VMM_PROCESSTABLE, LMEM_ZEROINIT, sizeof(VMMOB_PROCESS_TABLE), (OB_CLEANUP_CB)VmmProcessTable_CloseObCallback, NULL);
+        if(!ptNew) { return FALSE; }
+        ptNew->pObCNewPROC = ObContainer_New();
+        ptNew->pObProcessMap = ObMap_New(H, OB_MAP_FLAGS_OBJECT_OB);
+        if(!ptNew->pObCNewPROC || !ptNew->pObProcessMap) { return FALSE; }
+        ObContainer_SetOb(ptOld->pObCNewPROC, ptNew);
+        // move all old processes to new table:
+        ObMap_PushAll(ptNew->pObProcessMap, ptOld->pObProcessMap);
+        ptNew->cActive = ptOld->cActive;
+        ptNew->c = ptOld->c;
+    }
+    // 3: Push new fake process:
+    pTProc = VmmProcessCreateEntry(H, FALSE, dwPID, dwPPID, 0xff, 0, 0, szShortName, TRUE, pbE, H->vmm.offset.EPROCESS.cbMaxOffset + 0x10);
+    // 4: Update static process info with long name:
+    if(pTProc && !pTProc->pObPersistent->uszNameLong) {
+        pProcPers = pTProc->pObPersistent;
+        CharUtil_UtoU(uszLongName, -1, NULL, 0, &pProcPers->uszPathKernel, NULL, CHARUTIL_FLAG_ALLOC);
+        pProcPers->cuszPathKernel = (WORD)strlen(pProcPers->uszPathKernel);
+        // locate FullName by skipping to last \ character.
+        pProcPers->uszNameLong = (LPSTR)CharUtil_PathSplitLast(pProcPers->uszPathKernel);
+        pProcPers->cuszNameLong = (WORD)strlen(pProcPers->uszNameLong);
+    }
+    Ob_DECREF(pTProc);
+    return TRUE;
+}
+
+/*
 * Try to force clear the internal state of a process object without refreshing
 * the whole process list.
 * This may be useful when a quick update of a process must take place.
@@ -1319,6 +1381,11 @@ VOID VmmWriteScatterPhysical(_In_ VMM_HANDLE H, _Inout_ PPMEM_SCATTER ppMEMsPhys
 {
     DWORD i;
     PMEM_SCATTER pMEM;
+    // 1: pre-callback
+    if(H->vmm.MemUserCB.pfnWritePhysicalPreCB) {
+        H->vmm.MemUserCB.pfnWritePhysicalPreCB(H->vmm.MemUserCB.ctxWritePhysicalPre, (DWORD)-1, cpMEMsPhys, ppMEMsPhys);
+    }
+    // 2: write:
     LcWriteScatter(H->hLC, cpMEMsPhys, ppMEMsPhys);
     InterlockedAdd64(&H->vmm.stat.cPhysWrite, cpMEMsPhys);
     for(i = 0; i < cpMEMsPhys; i++) {
@@ -1335,9 +1402,13 @@ VOID VmmWriteScatterVirtual(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inou
     QWORD qwPA_PTE = 0, qwPagedPA = 0;
     PMEM_SCATTER pMEM;
     BOOL fProcessMagicHandle = ((SIZE_T)pProcess >= PROCESS_MAGIC_HANDLE_THRESHOLD);
-    // 0: 'magic' process handle
+    // 1: 'magic' process handle
     if(fProcessMagicHandle && !(pProcess = VmmProcessGet(H, (DWORD)(0-(SIZE_T)pProcess)))) { return; }
-    // 1: virt2phys translation
+    // 2: pre-callback
+    if(H->vmm.MemUserCB.pfnWriteVirtualPreCB) {
+        H->vmm.MemUserCB.pfnWriteVirtualPreCB(H->vmm.MemUserCB.ctxWriteVirtualPre, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
+    }
+    // 3: virt2phys translation
     for(i = 0; i < cpMEMsVirt; i++) {
         pMEM = ppMEMsVirt[i];
         MEM_SCATTER_STACK_PUSH(pMEM, pMEM->qwA);
@@ -1354,7 +1425,7 @@ VOID VmmWriteScatterVirtual(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _Inou
         H->vmm.fnMemoryModel.pfnPagedRead(H, pProcess, pMEM->qwA, qwPA_PTE, NULL, &qwPagedPA, NULL, 0);
         pMEM->qwA = qwPagedPA ? qwPagedPA : (QWORD)-1;
     }
-    // write to physical addresses
+    // 4: write to physical addresses
     VmmWriteScatterPhysical(H, ppMEMsVirt, cpMEMsVirt);
     for(i = 0; i < cpMEMsVirt; i++) {
         ppMEMsVirt[i]->qwA = MEM_SCATTER_STACK_POP(ppMEMsVirt[i]);
@@ -1375,14 +1446,18 @@ VOID VmmReadScatterPhysical(_In_ VMM_HANDLE H, _Inout_ PPMEM_SCATTER ppMEMsPhys,
     fCacheRecent = fCache && (VMM_FLAG_CACHE_RECENT_ONLY & flags);
     fCachePut = !(VMM_FLAG_NOCACHEPUT & flags);
     fCacheForce = (VMM_FLAG_FORCECACHE_READ & flags) && !(VMM_FLAG_FORCECACHE_READ_DISABLE & (flags | H->vmm.flags));
-    // 0: split very large reads:
+    // 0: split very large reads
     if(cpMEMsPhys > 0x2000) {
         for(iPA = 0; iPA < cpMEMsPhys; iPA += 0x2000) {
             VmmReadScatterPhysical(H, ppMEMsPhys + iPA, min(0x2000, cpMEMsPhys - iPA), flags);
         }
         return;
     }
-    // 1: cache read
+    // 1: pre-callback
+    if(H->vmm.MemUserCB.pfnReadPhysicalPreCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadPhysicalPreCB(H->vmm.MemUserCB.ctxReadPhysicalPre, (DWORD)-1, cpMEMsPhys, ppMEMsPhys);
+    }
+    // 2: cache read
     if(fCache) {
         c = 0;
         for(i = 0; i < cpMEMsPhys; i++) {
@@ -1416,7 +1491,11 @@ VOID VmmReadScatterPhysical(_In_ VMM_HANDLE H, _Inout_ PPMEM_SCATTER ppMEMsPhys,
     }
     // 3: read!
     LcReadScatter(H->hLC, cpMEMsPhys, ppMEMsPhys);
-    // 4: cache put
+    // 4: post-callback
+    if(H->vmm.MemUserCB.pfnReadPhysicalPostCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadPhysicalPostCB(H->vmm.MemUserCB.ctxReadPhysicalPost, (DWORD)-1, cpMEMsPhys, ppMEMsPhys);
+    }
+    // 5: cache put
     if(fCache) {
         for(i = 0; i < cpMEMsPhys; i++) {
             pMEM = ppMEMsPhys[i];
@@ -1433,7 +1512,7 @@ VOID VmmReadScatterPhysical(_In_ VMM_HANDLE H, _Inout_ PPMEM_SCATTER ppMEMsPhys,
             }
         }
     }
-    // 5: statistics and read fail zero fixups (if required)
+    // 6: statistics and read fail zero fixups (if required)
     for(i = 0; i < cpMEMsPhys; i++) {
         pMEM = ppMEMsPhys[i];
         if(pMEM->f) {
@@ -1466,9 +1545,13 @@ VOID VmmReadScatterVirtual_Old(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
     BOOL fAltAddrPte = VMM_FLAG_ALTADDR_VA_PTE & flags;
     BOOL fZeropadOnFail = VMM_FLAG_ZEROPAD_ON_FAIL & (flags | H->vmm.flags);
     BOOL fProcessMagicHandle = ((SIZE_T)pProcess >= PROCESS_MAGIC_HANDLE_THRESHOLD);
-    // 0: 'magic' process handle
+    // 1: 'magic' process handle
     if(fProcessMagicHandle && !(pProcess = VmmProcessGet(H, (DWORD)(0-(SIZE_T)pProcess)))) { return; }
-    // 1: allocate / set up buffers (if needed)
+    // 2: pre-callback
+    if(H->vmm.MemUserCB.pfnReadVirtualPreCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadVirtualPreCB(H->vmm.MemUserCB.ctxReadVirtualPre, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
+    }
+    // 3: allocate / set up buffers (if needed)
     if(cpMEMsVirt < 0x20) {
         ZeroMemory(pbBufferSmall, sizeof(pbBufferSmall));
         ppMEMsPhys = (PPMEM_SCATTER)pbBufferSmall;
@@ -1481,7 +1564,7 @@ VOID VmmReadScatterVirtual_Old(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
         ppMEMsPhys = (PPMEM_SCATTER)pbBufferLarge;
         pbBufferMEMs = pbBufferLarge + cpMEMsVirt * sizeof(PMEM_SCATTER);
     }
-    // 2: translate virt2phys
+    // 4: translate virt2phys
     for(iVA = 0, iPA = 0; iVA < cpMEMsVirt; iVA++) {
         pIoVA = ppMEMsVirt[iVA];
         // MEMORY READ ALREADY COMPLETED
@@ -1521,7 +1604,7 @@ VOID VmmReadScatterVirtual_Old(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
         pIoPA->f = FALSE;
         MEM_SCATTER_STACK_PUSH(pIoPA, (QWORD)pIoVA);
     }
-    // 3: read and check result
+    // 5: read and check result
     if(iPA) {
         VmmReadScatterPhysical(H, ppMEMsPhys, iPA, flags);
         while(iPA > 0) {
@@ -1529,6 +1612,11 @@ VOID VmmReadScatterVirtual_Old(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
             ((PMEM_SCATTER)MEM_SCATTER_STACK_POP(ppMEMsPhys[iPA]))->f = ppMEMsPhys[iPA]->f;
         }
     }
+    // 6: post-callback
+    if(H->vmm.MemUserCB.pfnReadVirtualPostCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadVirtualPostCB(H->vmm.MemUserCB.ctxReadVirtualPost, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
+    }
+    // 7: cleanup
     LocalFree(pbBufferLarge);
     if(fProcessMagicHandle) { Ob_DECREF(pProcess); }
 }
@@ -1546,16 +1634,20 @@ VOID VmmReadScatterVirtual_New(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
     BOOL fAltAddrPte = VMM_FLAG_ALTADDR_VA_PTE & flags;
     BOOL fZeropadOnFail = VMM_FLAG_ZEROPAD_ON_FAIL & (flags | H->vmm.flags);
     BOOL fProcessMagicHandle = ((SIZE_T)pProcess >= PROCESS_MAGIC_HANDLE_THRESHOLD);
-    // 0: split very large reads:
+    // 1: split very large reads:
     if(cpMEMsVirt > 0x2000) {
         for(iVA = 0; iVA < cpMEMsVirt; iVA += 0x2000) {
             VmmReadScatterVirtual_New(H, pProcess, ppMEMsVirt + iVA, min(0x2000, cpMEMsVirt - iVA), flags);
         }
         return;
     }
-    // 1: 'magic' process handle:
+    // 2: 'magic' process handle:
     if(fProcessMagicHandle && !(pProcess = VmmProcessGet(H, (DWORD)(0 - (SIZE_T)pProcess)))) { goto finish; }
-    // 2: allocate / set up buffers:
+    // 3: pre-callback
+    if(H->vmm.MemUserCB.pfnReadVirtualPreCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadVirtualPreCB(H->vmm.MemUserCB.ctxReadVirtualPre, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
+    }
+    // 4: allocate / set up buffers:
     if(cpMEMsVirt < 0x20) {
         ZeroMemory(pbBufferSmall, sizeof(pbBufferSmall));
         pbBuffer = pbBufferSmall;
@@ -1566,7 +1658,7 @@ VOID VmmReadScatterVirtual_New(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
     ppMEMs = (PPMEM_SCATTER)pbBuffer;
     pV2Ps = (PVMM_V2P_ENTRY)(pbBuffer + cpMEMsVirt * sizeof(PMEM_SCATTER));
     pMEMs_Phys = (PMEM_SCATTER)pV2Ps;
-    // 3: translate virt2phys: prepare:
+    // 5: translate virt2phys: prepare:
     for(iVA = 0; iVA < cpMEMsVirt; iVA++) {
         pMEM_Virt = ppMEMsVirt[iVA];
         // memory read already completed -> skip
@@ -1583,7 +1675,7 @@ VOID VmmReadScatterVirtual_New(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
         cV2P++;
     }
     if(!cV2P) { goto finish; }
-    // 4: dispatch to Virt2PhysEx translation function:
+    // 6: dispatch to Virt2PhysEx translation function:
     if(fAltAddrPte) {
         for(iV2P = 0; iV2P < cV2P; iV2P++) {
             pV2Ps[iV2P].fPaging = TRUE;
@@ -1591,7 +1683,7 @@ VOID VmmReadScatterVirtual_New(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
     } else {
         H->vmm.fnMemoryModel.pfnVirt2PhysEx(H, pV2Ps, cV2P, pProcess->fUserOnly, -1);
     }
-    // 5: interpret V2P translation results and fetch paged memory:
+    // 7: interpret V2P translation results and fetch paged memory:
     for(iV2P = 0; iV2P < cV2P; iV2P++) {
         pV2P = pV2Ps + iV2P;
         pMEM_Virt = ppMEMs[iV2P];
@@ -1624,11 +1716,15 @@ VOID VmmReadScatterVirtual_New(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _I
         MEM_SCATTER_STACK_PUSH(pMEM_Phys, (QWORD)pMEM_Virt);
     }
     if(!cPhys) { goto finish; }
-    // 6: read physical pages and check result:
+    // 8: read physical pages and check result:
     VmmReadScatterPhysical(H, ppMEMs, cPhys, flags);
     while(cPhys > 0) {
         cPhys--;
         ((PMEM_SCATTER)MEM_SCATTER_STACK_POP(ppMEMs[cPhys]))->f = ppMEMs[cPhys]->f;
+    }
+    // 9: post-callback
+    if(H->vmm.MemUserCB.pfnReadVirtualPostCB && !(flags & VMM_FLAG_NOMEMCALLBACK)) {
+        H->vmm.MemUserCB.pfnReadVirtualPostCB(H->vmm.MemUserCB.ctxReadVirtualPost, pProcess->dwPID, cpMEMsVirt, ppMEMsVirt);
     }
 finish:
     if(pbBuffer != pbBufferSmall) { LocalFree(pbBuffer); }
@@ -1755,6 +1851,7 @@ VOID VmmClose(_In_ VMM_HANDLE H)
     Ob_DECREF_NULL(&H->vmm.pObCacheMapHeapAlloc);
     Ob_DECREF_NULL(&H->vmm.pObCacheMapWinObjDisplay);
     Ob_DECREF_NULL(&H->vmm.pObCacheMapObCompressedShared);
+    Ob_DECREF_NULL(&H->vmm.pmObThreadCallback);
     DeleteCriticalSection(&H->vmm.LockMaster);
     DeleteCriticalSection(&H->vmm.LockPlugin);
     DeleteCriticalSection(&H->vmm.LockUpdateVM);
@@ -2106,6 +2203,7 @@ BOOL VmmInitialize(_In_ VMM_HANDLE H)
     H->vmm.pObCCachePrefetchEPROCESS = ObContainer_New();
     H->vmm.pObCCachePrefetchRegistry = ObContainer_New();
     H->vmm.pObCacheMapObCompressedShared = ObCacheMap_New(H, OB_COMPRESSED_CACHED_ENTRIES_MAX, NULL, OB_CACHEMAP_FLAGS_OBJECT_OB);
+    H->vmm.pmObThreadCallback = ObMap_New(H, OB_MAP_FLAGS_OBJECT_OB);
     InitializeCriticalSection(&H->vmm.LockMaster);
     InitializeCriticalSection(&H->vmm.LockPlugin);
     InitializeCriticalSection(&H->vmm.LockUpdateVM);
@@ -2119,6 +2217,389 @@ fail:
     VmmClose(H);
     ReleaseSRWLockExclusive(&LockSRW);
     return FALSE;
+}
+
+
+
+// ----------------------------------------------------------------------------
+// SCATTER READ MEMORY FUNCTIONALITY BELOW:
+// ----------------------------------------------------------------------------
+
+#ifdef VMM_64BIT
+#define VMM_SCATTER_MAX_SIZE_TOTAL      0x40000000000
+#else /* VMM_64BIT */
+#define VMM_SCATTER_MAX_SIZE_TOTAL      0x40000000
+#endif /* VMM_64BIT */
+
+#define VMM_SCATTER_MAX_SIZE_SINGLE     0x40000000
+
+typedef struct tdVMM_SCATTER_RANGE {
+    struct tdVMM_SCATTER_RANGE *FLink;
+    QWORD va;
+    PDWORD pcbRead;
+    PBYTE pb;
+    DWORD cb;
+    DWORD cMEMs;
+    MEM_SCATTER MEMs[0];
+} VMM_SCATTER_RANGE, *PVMM_SCATTER_RANGE;
+
+typedef struct tdVMMOB_SCATTER {
+    OB ObHdr;
+    VMM_HANDLE H;
+    DWORD flags;
+    BOOL fExecute;          // read/write is already executed
+    DWORD cPageTotal;
+    DWORD cPageAlloc;
+    POB_MAP pmMEMs;
+    PBYTE pbBuffer;
+    PVMM_SCATTER_RANGE pRanges;
+} VMMOB_SCATTER, *PVMMOB_SCATTER;
+
+_Success_(return)
+BOOL VmmScatter_PrepareInternal(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb, _Out_writes_opt_(cb) PBYTE pb, _Out_opt_ PDWORD pcbRead)
+{
+    QWORD vaMEM;
+    PMEM_SCATTER pMEM;
+    PVMM_SCATTER_RANGE pr = NULL;
+    DWORD i, iNewMEM = 0, cMEMsRequired, cMEMsPre = 0;
+    BOOL fForcePageRead = hS->flags & VMM_FLAG_SCATTER_FORCE_PAGEREAD;
+    // zero out any buffer received
+    if(pb && !(hS->flags & VMM_FLAG_SCATTER_PREPAREEX_NOMEMZERO)) {
+        ZeroMemory(pb, cb);
+    }
+    if(pcbRead) { *pcbRead = 0; }
+    // validity checks
+    if(va + cb < va) { return FALSE; }
+    if(hS->fExecute) { return FALSE; }
+    if(!cb) { return TRUE; }
+    if((cb >= VMM_SCATTER_MAX_SIZE_SINGLE) || (((SIZE_T)hS->cPageTotal << 12) + cb > VMM_SCATTER_MAX_SIZE_TOTAL)) { return FALSE; }
+    // count MEMs (required and pre-existing)
+    cMEMsRequired = ((va & 0xfff) + cb + 0xfff) >> 12;
+    vaMEM = va & ~0xfff;
+    for(i = 0; i < cMEMsRequired; i++) {
+        if(ObMap_ExistsKey(hS->pmMEMs, vaMEM | 1)) {
+            cMEMsPre++;
+        }
+        vaMEM += 0x1000;
+    }
+    // alloc scatter range (including any new MEMs required)
+    if(pb || pcbRead || (cMEMsRequired > cMEMsPre)) {
+        if(!(pr = LocalAlloc(LMEM_ZEROINIT, sizeof(VMM_SCATTER_RANGE) + (cMEMsRequired - cMEMsPre) * sizeof(MEM_SCATTER)))) { return FALSE; }
+        pr->va = va;
+        pr->cb = cb;
+        pr->pb = pb;
+        pr->pcbRead = pcbRead;
+        pr->cMEMs = cMEMsRequired - cMEMsPre;
+        for(i = 0; i < pr->cMEMs; i++) {
+            pMEM = pr->MEMs + i;
+            pMEM->version = MEM_SCATTER_VERSION;
+            pMEM->cb = 0x1000;
+        }
+        pr->FLink = hS->pRanges;
+        hS->pRanges = pr;
+    }
+    // assign addresses and/or buffers to MEMs
+    vaMEM = va & ~0xfff;
+    for(i = 0; i < cMEMsRequired; i++) {
+        if((pMEM = ObMap_GetByKey(hS->pmMEMs, vaMEM | 1))) {
+            // pre-existing MEM
+            if(pMEM->cb != 0x1000) {
+                // pre-existing MEM was a tiny MEM -> since we have two reads
+                // subscribing to this MEM we 'upgrade' it to a full MEM.
+                pMEM->qwA = pMEM->qwA & ~0xfff;
+                pMEM->cb = 0x1000;
+            }
+        } else {
+            // new MEM
+            if(!pr || (pr->cMEMs <= iNewMEM)) {
+                // should never happen!
+                return FALSE;
+            }
+            pMEM = pr->MEMs + iNewMEM;
+            iNewMEM++;
+            pMEM->qwA = vaMEM;
+            if((cMEMsRequired == 1) && (cb <= 0x400) && !fForcePageRead) {
+                // single-page small read -> optimize MEM for small read.
+                // NB! buffer allocation still remains 0x1000 even if not all is used for now.
+                pMEM->cb = (cb + 15) & ~0x7;
+                pMEM->qwA = va & ~0x7;
+                if((pMEM->qwA & 0xfff) + pMEM->cb > 0x1000) {
+                    pMEM->qwA = (pMEM->qwA & ~0xfff) + 0x1000 - pMEM->cb;
+                }
+            }
+            if(!ObMap_Push(hS->pmMEMs, vaMEM | 1, pMEM)) {
+                // should never happen!
+                return FALSE;
+            }
+            hS->cPageTotal++;
+        }
+        if(pb && !pMEM->pb && (vaMEM >= va) && (vaMEM + 0xfff < va + cb)) {
+            pMEM->pb = pb + vaMEM - va;
+            hS->cPageAlloc++;
+        }
+        vaMEM += 0x1000;
+    }
+    return TRUE;
+}
+
+/*
+* Prepare (add) a memory range for reading. The buffer pb and the read length
+* *pcbRead will be populated when VmmScatter_Execute() is later called.
+* NB! the buffer pb must not be deallocated when VmmScatter_Execute() is called.
+* -- hS
+* -- va = start address of the memory range to read.
+* -- cb = size of memory range to read.
+* -- pb = buffer to populate with read memory when calling VmmScatter_Execute()
+* -- pcbRead = optional pointer to be populated with number of bytes successfully read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_PrepareEx(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb, _Out_writes_opt_(cb) PBYTE pb, _Out_opt_ PDWORD pcbRead)
+{
+    return VmmScatter_PrepareInternal(hS, va, cb, pb, pcbRead);
+}
+
+/*
+* Prepare (add) a memory range for reading. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- va = start address of the memory range to read.
+* -- cb = size of memory range to read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb)
+{
+    return VmmScatter_PrepareInternal(hS, va, cb, NULL, NULL);
+}
+
+/*
+* Prepare (add) multiple memory ranges. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- psva = set with addresses to read.
+* -- cb = size of memory range to read.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare3(_In_ PVMMOB_SCATTER hS, _In_opt_ POB_SET psva, _In_ DWORD cb)
+{
+    QWORD va = 0;
+    BOOL f = TRUE;
+    while((va = ObSet_GetNext(psva, va))) {
+        f = VmmScatter_PrepareInternal(hS, va, cb, NULL, NULL) && f;
+    }
+    return f;
+}
+
+/*
+* Prepare (add) multiple memory ranges. The memory may after a call to
+* VmmScatter_Execute() be retrieved with VmmScatter_Read().
+* -- hS
+* -- pm = map of objects.
+* -- cb = size of memory range to read.
+* -- pfnFilterCB = filter as required by ObMap_FilterSet function.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Prepare5(_In_ PVMMOB_SCATTER hS, _In_opt_ POB_MAP pm, _In_ DWORD cb, _In_ OB_MAP_FILTERSET_PFN_CB pfnFilterCB)
+{
+    BOOL f;
+    POB_SET psObA = ObMap_FilterSet(pm, NULL, pfnFilterCB);
+    f = VmmScatter_Prepare3(hS, psObA, cb);
+    Ob_DECREF(psObA);
+    return f;
+
+}
+
+/*
+* Clear/Reset the handle for use in another subsequent read scatter operation.
+* -- hS = the scatter handle to clear for reuse.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Clear(_In_ PVMMOB_SCATTER hS)
+{
+    PVMM_SCATTER_RANGE pRangeRd, pRangeRdNext = hS->pRanges;
+    hS->fExecute = FALSE;
+    hS->cPageTotal = 0;
+    hS->cPageAlloc = 0;
+    hS->pRanges = NULL;
+    ObMap_Clear(hS->pmMEMs);
+    LocalFree(hS->pbBuffer);
+    hS->pbBuffer = NULL;
+    while(pRangeRdNext) {
+        pRangeRd = pRangeRdNext;
+        pRangeRdNext = pRangeRd->FLink;
+        LocalFree(pRangeRd);
+    }
+    return TRUE;
+}
+
+/*
+* Read out memory in previously populated ranges. This function should only be
+* called after the memory has been retrieved using VmmScatter_Execute().
+* -- hS
+* -- va
+* -- cb
+* -- pb
+* -- pcbRead
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Read(_In_ PVMMOB_SCATTER hS, _In_ QWORD va, _In_ DWORD cb, _Out_writes_opt_(cb) PBYTE pb, _Out_opt_ PDWORD pcbRead)
+{
+    PMEM_SCATTER pMEM;
+    BOOL fResultFirst = FALSE;
+    DWORD cbChunk, cbReadTotal = 0;
+    if(pcbRead) { *pcbRead = 0; }
+    if(va + cb < va) { return FALSE; }
+    if(!hS->fExecute) { return FALSE; }
+    // 1st item may not be page aligned or may be 'tiny' sized MEM:
+    {
+        cbChunk = min(cb, 0x1000 - (va & 0xfff));
+        pMEM = ObMap_GetByKey(hS->pmMEMs, (va & ~0xfff) | 1);
+        if(pMEM && pMEM->f) {
+            if(pMEM->cb == 0x1000) {
+                // normal page-sized MEM:
+                if(pb) {
+                    memcpy(pb, pMEM->pb + (va & 0xfff), cbChunk);
+                    pb += cbChunk;
+                }
+                cbReadTotal += cbChunk;
+                fResultFirst = TRUE;
+            } else if((va >= pMEM->qwA) && (va + cb <= pMEM->qwA + pMEM->cb)) {
+                // tiny MEM with in-range read:
+                if(pb) {
+                    memcpy(pb, pMEM->pb + (va - pMEM->qwA), cbChunk);
+                    pb += cbChunk;
+                }
+                cbReadTotal += cbChunk;
+                fResultFirst = TRUE;
+            }
+        }
+        if(!fResultFirst && pb) {
+            ZeroMemory(pb, cbChunk);
+            pb += cbChunk;
+        }
+        va += cbChunk;
+        cb -= cbChunk;
+    }
+    // page aligned va onwards (read from normal page-sized MEMs):
+    while(cb) {
+        cbChunk = min(cb, 0x1000);
+        pMEM = ObMap_GetByKey(hS->pmMEMs, va | 1);
+        if(pMEM && pMEM->f && (pMEM->cb == 0x1000)) {
+            cbReadTotal += cbChunk;
+            if(pb) {
+                if(pb != pMEM->pb) {
+                    memcpy(pb, pMEM->pb, cbChunk);
+                }
+                pb += cbChunk;
+            }
+        } else {
+            if(pb) {
+                if(pMEM && (pb != pMEM->pb)) {
+                    ZeroMemory(pb, cbChunk);
+                }
+                pb += cbChunk;
+            }
+        }
+        va += cbChunk;
+        cb -= cbChunk;
+    }
+    if(pcbRead) { *pcbRead = cbReadTotal; }
+    return (cbReadTotal > 0);
+}
+
+/*
+* Retrieve the memory ranges previously populated with calls to the
+* VmmScatter_Prepare* functions.
+* -- hS
+* -- pProcess = the process to read from, NULL = physical memory.
+* -- return
+*/
+_Success_(return)
+BOOL VmmScatter_Execute(_In_ PVMMOB_SCATTER hS, _In_ PVMM_PROCESS pProcess)
+{
+    DWORD i, cbBuffer, cbBufferAlloc, oBufferAllocMEM = 0;
+    PMEM_SCATTER pMEM;
+    PPMEM_SCATTER ppMEMs;
+    PVMM_SCATTER_RANGE pRange;
+    // validate
+    if(!hS->cPageTotal || (hS->cPageTotal != ObMap_Size(hS->pmMEMs))) { return FALSE; }
+    // alloc (if required)
+    cbBuffer = (hS->cPageTotal - hS->cPageAlloc) * 0x1000;
+    if(!hS->fExecute) {
+        cbBufferAlloc = cbBuffer + hS->cPageTotal * sizeof(PMEM_SCATTER);
+        if(!(hS->pbBuffer = LocalAlloc(LMEM_ZEROINIT, cbBufferAlloc))) { return FALSE; }
+    }
+    ppMEMs = (PPMEM_SCATTER)(hS->pbBuffer + cbBuffer);
+    // fixup MEMs
+    for(i = 0; i < hS->cPageTotal; i++) {
+        pMEM = ObMap_GetByIndex(hS->pmMEMs, i);
+        ppMEMs[i] = pMEM;
+        if(!pMEM->pb) {
+            pMEM->pb = hS->pbBuffer + oBufferAllocMEM;
+            oBufferAllocMEM += 0x1000;
+        } else if(hS->fExecute) {
+            pMEM->f = FALSE;
+            ZeroMemory(pMEM->pb, 0x1000);
+        }
+    }
+    // read scatter
+    if(pProcess) {
+        VmmReadScatterVirtual(hS->H, pProcess, ppMEMs, hS->cPageTotal, hS->flags);
+    } else {
+        VmmReadScatterPhysical(hS->H, ppMEMs, hS->cPageTotal, hS->flags);
+    }
+    hS->fExecute = TRUE;
+    // range fixup (if required)
+    pRange = hS->pRanges;
+    while(pRange) {
+        if(pRange->pb || pRange->pcbRead) {
+            VmmScatter_Read(hS, pRange->va, pRange->cb, pRange->pb, pRange->pcbRead);
+        }
+        pRange = pRange->FLink;
+    }
+    return TRUE;
+}
+
+VOID VmmScatter_CleanupCB(PVMMOB_SCATTER hS)
+{
+    PVMM_SCATTER_RANGE pRangeRd, pRangeRdNext;
+    // dealloc / free
+    Ob_DECREF(hS->pmMEMs);
+    LocalFree(hS->pbBuffer);
+    pRangeRdNext = hS->pRanges;
+    while(pRangeRdNext) {
+        pRangeRd = pRangeRdNext;
+        pRangeRdNext = pRangeRd->FLink;
+        LocalFree(pRangeRd);
+    }
+}
+
+/*
+* Initialize a scatter handle which is used to call VmmScatter* functions.
+* CALLER DECREF: return
+* -- H
+* -- flags = flags as in VMM_FLAG_*
+* -- return = handle to be used in VmmScatter_* functions.
+*/
+_Success_(return != NULL)
+PVMMOB_SCATTER VmmScatter_Initialize(_In_ VMM_HANDLE H, _In_ DWORD flags)
+{
+    PVMMOB_SCATTER hS = NULL;
+    if(!(hS = Ob_AllocEx(H, OB_TAG_VMM_SCATTER, LMEM_ZEROINIT, sizeof(VMMOB_SCATTER), (OB_CLEANUP_CB)VmmScatter_CleanupCB, NULL))) {
+        return NULL;
+    }
+    if(!(hS->pmMEMs = ObMap_New(H, OB_MAP_FLAGS_OBJECT_VOID))) {
+        Ob_DECREF(hS);
+        return NULL;
+    }
+    hS->H = H;
+    hS->flags = flags;
+    return hS;
 }
 
 
@@ -2707,6 +3188,7 @@ PVMM_MAP_HEAPENTRY VmmMap_GetHeapEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_HEAP p
 * CALLER DECREF: ppObHeapAllocMap
 * -- H
 * -- pProcess
+* -- vaHeap = va of heap or heap id.
 * -- ppObHeapAllocMap
 * -- return
 */
@@ -2767,6 +3249,26 @@ int VmmMap_GetThreadEntry_CmpFind(_In_ QWORD dwTID, _In_ QWORD qwEntry)
 PVMM_MAP_THREADENTRY VmmMap_GetThreadEntry(_In_ VMM_HANDLE H, _In_ PVMMOB_MAP_THREAD pThreadMap, _In_ DWORD dwTID)
 {
     return Util_qfind((QWORD)dwTID, pThreadMap->cMap, pThreadMap->pMap, sizeof(VMM_MAP_THREADENTRY), VmmMap_GetThreadEntry_CmpFind);
+}
+
+/*
+* Retrieve the callstack for the specified thread. Callstack parsing is:
+* - only supported for x64 user-mode threads.
+* - best-effort and is very resource intense since it may
+* - may download a large amounts of PDB symbol data from the Microsoft symbol server.
+* Use with caution!
+* CALLER DECREF: *ppObThreadCallstackMap
+* -- H
+* -- pProcess
+* -- pThread
+* -- flags = VMM_FLAG_NOCACHE (do not use cache)
+* -- ppObThreadCallstackMap
+* -- return
+*/
+_Success_(return)
+BOOL VmmMap_GetThreadCallstack(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ PVMM_MAP_THREADENTRY pThread, _In_ DWORD flags, _Out_ PVMMOB_MAP_THREADCALLSTACK *ppObThreadCallstackMap)
+{
+    return VmmWinThreadCs_GetCallstack(H, pProcess, pThread, flags, ppObThreadCallstackMap);
 }
 
 /*

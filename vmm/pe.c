@@ -186,7 +186,7 @@ BOOL PE_GetThunkInfoEAT(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWOR
     VmmReadEx(H, pProcess, vaExportDirectory, pbExportDirectory, cbExportDirectory, &cbRead, VMM_FLAG_ZEROPAD_ON_FAIL);
     if(!cbRead) { goto cleanup; }
     PIMAGE_EXPORT_DIRECTORY exp = (PIMAGE_EXPORT_DIRECTORY)pbExportDirectory;
-    if(!exp || !exp->NumberOfNames || !exp->AddressOfNames) { goto cleanup; }
+    if(!exp || !exp->NumberOfNames || (exp->NumberOfNames > 0x00100000) || !exp->AddressOfNames) { goto cleanup; }
     vaRVAAddrNames = vaModuleBase + exp->AddressOfNames;
     vaNameOrdinals = vaModuleBase + exp->AddressOfNameOrdinals;
     vaRVAAddrFunctions = vaModuleBase + exp->AddressOfFunctions;
@@ -340,6 +340,32 @@ BOOL PE_SectionGetFromName(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ Q
     if(!szSectionName[2] && ((i = strtoul(szSectionName, NULL, 16)) || (*(PWORD)szSectionName == 0x3030)) && (i < cSections)) {
         memcpy(pSection, pSectionBase + i, sizeof(IMAGE_SECTION_HEADER));
         return TRUE;
+    }
+    return FALSE;
+}
+
+/*
+* Retrieve a single section header given its address offset.
+* -- H
+* -- pProcess
+* -- vaModuleBase
+* -- cboAddress
+* -- pSection
+* -- return
+*/
+_Success_(return)
+BOOL PE_SectionGetFromAddressOffset(_In_ VMM_HANDLE H, _In_ PVMM_PROCESS pProcess, _In_ QWORD vaModuleBase, _In_ DWORD cboAddress, _Out_ PIMAGE_SECTION_HEADER pSection)
+{
+    WORD i, cSections;
+    IMAGE_SECTION_HEADER Sections[0x40];
+    cSections = PE_SectionGetNumberOf(H, pProcess, vaModuleBase);
+    if(!cSections || (cSections > 0x40)) { return FALSE; }
+    if(!PE_SectionGetAll(H, pProcess, vaModuleBase, cSections, Sections)) { return FALSE; }
+    for(i = 0; i < cSections; i++) {
+        if((cboAddress >= Sections[i].VirtualAddress) && (cboAddress - Sections[i].VirtualAddress < Sections[i].Misc.VirtualSize)) {
+            memcpy(pSection, &Sections[i], sizeof(IMAGE_SECTION_HEADER));
+            return TRUE;
+        }
     }
     return FALSE;
 }

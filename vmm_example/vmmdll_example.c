@@ -79,7 +79,7 @@ VOID ShowKeyPress()
 {
     printf("PRESS ANY KEY TO CONTINUE ...\n");
     Sleep(250);
-    _getch();
+    //_getch();
 }
 
 VOID PrintHexAscii(_In_ PBYTE pb, _In_ DWORD cb)
@@ -174,6 +174,26 @@ BOOL CallbackSearchYaraFilter(_In_ PVMMDLL_YARA_CONFIG ctx, _In_opt_ PVMMDLL_MAP
 
 
 // ----------------------------------------------------------------------------
+// Callback functions (MEM CALLBACK) functionality below:
+// ----------------------------------------------------------------------------
+
+VOID CallbackMemCallback_PhysicalReadPost(_In_opt_ PVOID ctxUser, _In_ DWORD dwPID, _In_ DWORD cpMEMs, _In_ PPMEM_SCATTER ppMEMs)
+{
+    DWORD i;
+    PMEM_SCATTER pMEM;
+    for(i = 0; i < cpMEMs; i++) {
+        pMEM = ppMEMs[i];
+        if(pMEM->f && (pMEM->qwA == 0x1000) && (pMEM->cb >= 0x10)) {
+            // Successful physical memory read at address 0x1000.
+            // This is simplified since read may start mid-range if
+            // non-page-aligned MEMs are used.
+            memcpy(pMEM->pb, (PBYTE)"0123456789ABCDEF", 0x10);
+        }
+    }
+}
+
+
+// ----------------------------------------------------------------------------
 // Main entry point which contains various sample code how to use MemProcFS DLL.
 // Please walk though for different API usage examples. To select device ensure
 // one device type only is uncommented in the #defines above.
@@ -187,10 +207,11 @@ int main(_In_ int argc, _In_ char* argv[])
     VMM_HANDLE hVMM = NULL;
     BOOL result;
     NTSTATUS nt;
-    DWORD i, cbRead, dwPID;
+    DWORD i, j, cbRead, dwPID;
     DWORD dw = 0;
     QWORD va;
     BYTE pbPage1[0x1000], pbPage2[0x1000];
+    CHAR usz[MAX_PATH];
 
 #ifdef _INITIALIZE_FROM_FILE
     // Initialize PCILeech DLL with a memory dump file.
@@ -666,6 +687,43 @@ int main(_In_ int argc, _In_ char* argv[])
     }
 
 
+    // THREAD CALLSTACK: Retrieve callstack information for the threads in the
+    // 'smss.exe' process and display on the screen.
+    DWORD dwPID_SMSS = 0;
+    PVMMDLL_MAP_THREAD pThreadMap_SMSS = NULL;
+    PVMMDLL_MAP_THREADENTRY pThreadMapEntry_SMSS;
+    PVMMDLL_MAP_THREAD_CALLSTACK pThreadCallstack = NULL;
+    PVMMDLL_MAP_THREAD_CALLSTACKENTRY pThreadCallstackEntry = NULL;
+    printf("------------------------------------------------------------\n");
+    printf("# Get Thread Callstack Information of 'smss.exe' threads.   \n");
+    ShowKeyPress();
+    VMMDLL_PidGetFromName(hVMM, "smss.exe", &dwPID_SMSS);
+    VMMDLL_Map_GetThread(hVMM, dwPID_SMSS, &pThreadMap_SMSS);
+    if(!dwPID_SMSS || !pThreadMap_SMSS) {
+        printf("FAIL:    VMMDLL_PidGetFromName//VMMDLL_Map_GetThread\n");
+        return 1;
+    }
+    for(i = 0; i < pThreadMap_SMSS->cMap; i++) {
+        pThreadMapEntry_SMSS = &pThreadMap_SMSS->pMap[i];
+        printf("CALL:    VMMDLL_Map_GetThread_CallstackU\n");
+        result = VMMDLL_Map_GetThread_CallstackU(hVMM, dwPID_SMSS, pThreadMapEntry_SMSS->dwTID, 0, &pThreadCallstack);
+        if(!result) {
+            printf("FAIL:    VMMDLL_Map_GetThread_CallstackU\n");
+            return 1;
+        }
+        printf("SUCCESS: VMMDLL_Map_GetThread_CallstackU\n");
+        printf(pThreadCallstack->uszText);
+        printf("-------------\n");
+        for(j = 0; j < pThreadCallstack->cMap; j++) {
+            pThreadCallstackEntry = &pThreadCallstack->pMap[j];
+            printf("%02x: %016llx %016llx :: %s!%s+%x\n", pThreadCallstackEntry->i, pThreadCallstackEntry->vaRSP, pThreadCallstackEntry->vaRetAddr, pThreadCallstackEntry->uszModule, pThreadCallstackEntry->uszFunction, pThreadCallstackEntry->cbDisplacement);
+        }
+        printf("------------------------------------------------------------\n");
+        VMMDLL_MemFree(pThreadCallstack); pThreadCallstack = NULL;
+    }
+    VMMDLL_MemFree(pThreadMap_SMSS); pThreadMap_SMSS = NULL;
+
+
     // HANDLES: Retrieve handle information about handles in the explorer.exe
     // process and display on the screen.
     printf("------------------------------------------------------------\n");
@@ -875,7 +933,7 @@ int main(_In_ int argc, _In_ char* argv[])
         return 1;
     }
 
-
+    
     // Retrieve the module of kernel32.dll by its name. Note it is also possible
     // to retrieve it by retrieving the complete module map (list) and iterate
     // over it. But if the name of the module is known this is more convenient.
@@ -905,7 +963,7 @@ int main(_In_ int argc, _In_ char* argv[])
         return 1;
     }
 
-
+    
     // Retrieve the memory at the base of kernel32.dll previously fetched and
     // display the first 0x200 bytes of it. This read is fetched from the cache
     // by default (if possible). If reads should be forced from the DMA device
@@ -1585,7 +1643,143 @@ int main(_In_ int argc, _In_ char* argv[])
         }
     }
 
-    
+
+    // Use a Memory Callback function to alter the MemProcFS view of underlying
+    // physical memory. This can be useful to implement alternative views of
+    // memory and/or for debugging and logging purposes.
+    // It's possible to register a callback function which will be called every
+    // time a physical memory read or write is performed.
+    // It also works for any process internal virtual memory read or write.
+    // For this example to work we'll read uncached memory since a cache hit
+    // would prevent the need for a 2nd physical memory read.
+    {
+        printf("------------------------------------------------------------\n");
+        printf("# Demonstrate memory callback functionality:                \n");
+        printf("     (1) Read existing data from physical memory at 0x1000  \n");
+        printf("     (2) Register a callback function:                      \n");
+        printf("     (3) Read existing data from physical memory at 0x1000  \n");
+        printf("     (4) Unregister the callback function:                  \n");
+        ShowKeyPress();
+        printf("CALL:    VMMDLL_MemRead - BEFORE CALLBACK\n");
+        result = VMMDLL_MemReadEx(hVMM, -1, 0x1000, pbPage1, 0x1000, NULL, VMMDLL_FLAG_NOCACHE);
+        if(result) {
+            printf("SUCCESS: VMMDLL_MemRead - BEFORE CALLBACK\n");
+            PrintHexAscii(pbPage1, 0x80);
+        } else {
+            printf("FAIL:    VMMDLL_MemRead - BEFORE CALLBACK\n");
+            return 1;
+        }
+        printf("CALL:    VMMDLL_MemCallback (Register)\n");
+        VMMDLL_MemCallback(hVMM, VMMDLL_MEM_CALLBACK_READ_PHYSICAL_POST, NULL, CallbackMemCallback_PhysicalReadPost);
+        printf("CALL:    VMMDLL_MemRead - AFTER CALLBACK\n");
+        result = VMMDLL_MemReadEx(hVMM, -1, 0x1000, pbPage1, 0x1000, NULL, VMMDLL_FLAG_NOCACHE);
+        if(result) {
+            printf("SUCCESS: VMMDLL_MemRead - AFTER CALLBACK\n");
+            PrintHexAscii(pbPage1, 0x80);
+        } else {
+            printf("FAIL:    VMMDLL_MemRead - AFTER CALLBACK\n");
+            return 1;
+        }
+        printf("CALL:    VMMDLL_MemCallback (Unregister)\n");
+        VMMDLL_MemCallback(hVMM, VMMDLL_MEM_CALLBACK_READ_PHYSICAL_POST, NULL, NULL);
+    }
+
+
+
+
+    // PDB/Symbol functionality: Get the module name of a loaded PDB file.
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get the PDB file path of kernel32.dll                \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_Map_GetModuleFromNameU\n");
+    PVMMDLL_MAP_MODULEENTRY pPdbModuleEntryNtdll;
+    result = VMMDLL_Map_GetModuleFromNameU(hVMM, dwPID, "ntdll.dll", &pPdbModuleEntryNtdll, 0);
+    if(!result) {
+        printf("FAIL:    VMMDLL_Map_GetModuleFromNameU\n");
+        return 1;
+    }
+    printf("CALL:    VMMDLL_PdbLoad\n");
+    CHAR szPdbModuleName_NtDll[MAX_PATH] = { 0 };
+    result = VMMDLL_PdbLoad(hVMM, dwPID, pPdbModuleEntryNtdll->vaBase, szPdbModuleName_NtDll);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbLoad\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbLoad [%s]\n", szPdbModuleName_NtDll);
+
+
+    // PDB/Symbol functionality: Get the address of the symbol/function 'ntdll!LdrLoadDll'
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get symbol address of ntdll.dll!LdrLoadDll    \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_PdbSymbolAddress\n");
+    QWORD vaPdbSymbolAddress_LdrLoadDll = 0;
+    result = VMMDLL_PdbSymbolAddress(hVMM, szPdbModuleName_NtDll, "LdrLoadDll", &vaPdbSymbolAddress_LdrLoadDll);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbSymbolAddress\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbSymbolAddress [%llx]\n", vaPdbSymbolAddress_LdrLoadDll);
+
+
+    // PDB/Symbol functionality: Get the symbol (exactly/near) of the address of the function 'LdrLoadDll'
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get symbol name exactly/near(+0) address             \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_PdbSymbolName\n");
+    DWORD dwPdbSymbolDisplacement1 = 0;
+    result = VMMDLL_PdbSymbolName(hVMM, szPdbModuleName_NtDll, vaPdbSymbolAddress_LdrLoadDll, usz, &dwPdbSymbolDisplacement1);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbSymbolName\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbSymbolName name:[%s] displacement:[%x]\n", usz, dwPdbSymbolDisplacement1);
+
+
+    // PDB/Symbol functionality: Get the symbol (exactly/near) of the address of the function 'LdrLoadDll'
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get symbol name near(+10) address                    \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_PdbSymbolName\n");
+    DWORD dwPdbSymbolDisplacement2 = 0;
+    result = VMMDLL_PdbSymbolName(hVMM, szPdbModuleName_NtDll, vaPdbSymbolAddress_LdrLoadDll + 0x10, usz, &dwPdbSymbolDisplacement2);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbSymbolName\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbSymbolName name:[%s] displacement:[%x]\n", usz, dwPdbSymbolDisplacement2);
+
+
+    // PDB/Symbol functionality: Get type size of the kernel structure '_EPROCESS'
+    // The kernel is a special 'module' which is loaded by the name of 'nt', i.e.
+    // no previous call to 'VMMDLL_PdbLoad()' is required.
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get type size of _EPROCESS                           \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_PdbTypeSize\n");
+    DWORD dwPdbTypeSize = 0;
+    result = VMMDLL_PdbTypeSize(hVMM, "nt", "_EPROCESS", &dwPdbTypeSize);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbTypeSize\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbTypeSize name:[_EPROCESS] type_size:[%x]\n", dwPdbTypeSize);
+
+
+    // PDB/Symbol functionality: Get type offset of the _EPROCESS.Token child member.
+    // The kernel is a special 'module' which is loaded by the name of 'nt', i.e.
+    // no previous call to 'VMMDLL_PdbLoad()' is required.
+    printf("------------------------------------------------------------\n");
+    printf("# PDB: Get type child offset of _EPROCESS.Token              \n");
+    ShowKeyPress();
+    printf("CALL:    VMMDLL_PdbTypeChildOffset\n");
+    DWORD dwPdbTypeChildOffset = 0;
+    result = VMMDLL_PdbTypeChildOffset(hVMM, "nt", "_EPROCESS", "Token", &dwPdbTypeChildOffset);
+    if(!result) {
+        printf("FAIL:    VMMDLL_PdbTypeChildOffset\n");
+        return 1;
+    }
+    printf("SUCCESS: VMMDLL_PdbTypeChildOffset name:[_EPROCESS.Token] child_offset:[%x]\n", dwPdbTypeChildOffset);
 
 
 
